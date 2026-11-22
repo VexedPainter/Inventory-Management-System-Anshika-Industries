@@ -2470,3 +2470,8 @@ body.is-offline #offline-banner { display: block; }
     padding: 0.2rem 0.6rem;
     border-radius: 9999px;
 }
+
+/* Defect 6 fix: item drawer full-width on small phones (<=420px viewport) */
+@media (max-width: 420px) {
+    #itemDrawer { width: 100%; }
+}

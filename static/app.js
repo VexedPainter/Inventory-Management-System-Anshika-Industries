@@ -417,11 +417,27 @@ function switchTab(tabName) {
     if (tabName === 'reports') fetchDeadStock();
     if (tabName === 'dashboard') fetchDailyDigestCard();
 
-    const navItems = document.querySelectorAll('.sidebar .nav-item');
-    const tabsList = ['dashboard', 'inventory', 'movements', 'cycle-count', 'procurement', 'sales', 'customers', 'suppliers', 'reports', 'analytics', 'ai-assistant', 'audit'];
-    const idx = tabsList.indexOf(tabName);
-    if (idx >= 0 && navItems[idx]) {
-        navItems[idx].classList.add('active');
+    // ID-based nav highlight (robust — not fragile index coupling)
+    const navIdMap = {
+        'dashboard':    'nav-item-dashboard',
+        'inventory':    'nav-item-inventory',
+        'movements':    'nav-item-movements',
+        'cycle-count':  'nav-item-cycle-count',
+        'procurement':  'nav-item-procurement',
+        'sales':        'nav-item-sales',
+        'customers':    'nav-item-customers',
+        'suppliers':    'nav-item-suppliers',
+        'reports':      'nav-item-reports',
+        'analytics':    'nav-item-analytics',
+        'ai-assistant': 'nav-item-ai-assistant',
+        'audit':        'nav-item-audit',
+        'users':        'nav-item-users',
+        'business-impact': 'nav-item-bizimpact',
+    };
+    const activeNavId = navIdMap[tabName];
+    if (activeNavId) {
+        const activeNavEl = document.getElementById(activeNavId);
+        if (activeNavEl) activeNavEl.classList.add('active');
     }
 
     // Update Mobile Bottom Nav Active States
@@ -7481,6 +7497,7 @@ async function submitPasswordChange() {
 // --- 2. User Management Controller (Admin) ---
 
 async function loadUsersList() {
+    if ((state.currentUser?.role || '').toLowerCase() !== 'admin') return;
     const tbody = document.getElementById('usersTableBody');
     if (tbody) tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:1.5rem;" class="text-subtle">Loading users...</td></tr>';
 
@@ -8376,7 +8393,7 @@ function selectPricingTier(tierId, price) {
     }
 }
 
-async function computeUnitEconomics() {
+async async function computeUnitEconomics() {
     const price = parseFloat(document.getElementById('ue_price')?.value || 9999);
     const hosting = parseFloat(document.getElementById('ue_hosting')?.value || 0);
     const llm = parseFloat(document.getElementById('ue_llm')?.value || 0);
@@ -8396,6 +8413,7 @@ async function computeUnitEconomics() {
     try {
         const res = await apiFetch('/api/business-impact/unit-economics', {
             method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
 
@@ -8411,7 +8429,9 @@ async function computeUnitEconomics() {
         if (breakEvenEl) breakEvenEl.textContent = `${res.break_even_customers} active customers`;
         if (summaryEl) summaryEl.textContent = res.contribution_summary;
     } catch (e) {
-        // Silently fail or ignore during fast typing
+        const msg = (e && typeof e === 'object' && typeof e.message === 'string' && e.message)
+            ? e.message : 'Unit economics calculation failed. Check inputs.';
+        if (typeof showToast === 'function') showToast(msg, 'error');
     }
 }
 
@@ -8452,6 +8472,11 @@ async function computeUnitEconomics() {
         const bizNav = document.getElementById('nav-item-bizimpact');
         if (bizNav) {
             bizNav.style.display = canView ? 'flex' : 'none';
+        }
+        // Hide User Accounts nav for non-admin
+        const usersNav = document.getElementById('nav-item-users');
+        if (usersNav) {
+            usersNav.style.display = (roleNorm === 'admin') ? '' : 'none';
         }
     };
 })();

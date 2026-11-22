@@ -22,7 +22,7 @@ import datetime
 import tempfile
 import logging
 from collections import defaultdict
-from typing import Optional, Literal
+from typing import Optional, Literal, List, Dict, Any
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -49,6 +49,7 @@ from slowapi.errors import RateLimitExceeded
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from database import (
+    DATABASE_URL,
     SessionLocal, init_db, Vendor, Inventory, Procurement,
     StockMovement, POItem, AuditLog,
     UserRole, ROLE_PERMISSIONS, AppSetting, AutomationRun, Outbox, seed_default_settings,
@@ -1002,6 +1003,13 @@ async def get_service_worker():
     sw_file = os.path.join(os.path.dirname(__file__), "static", "sw.js")
     return FileResponse(sw_file, media_type="application/javascript")
 
+def mask_database_url(url: str) -> str:
+    """Mask password credentials in database connection URL."""
+    if not url:
+        return ""
+    import re
+    return re.sub(r'(://[^:]+:)([^@]+)(@)', r'\1***\3', url)
+
 @app.get("/api/health")
 async def api_health(db: Session = Depends(get_db)):
     """Enterprise health check endpoint reporting DB connectivity, scheduler, and security status."""
@@ -1037,9 +1045,12 @@ async def api_health(db: Session = Depends(get_db)):
         "timestamp": datetime.datetime.now().isoformat(),
         "database": {
             "status": "connected" if db_ok else "disconnected",
+            "connected": db_ok,
             "dialect": dialect_name,
+            "url": mask_database_url(DATABASE_URL),
             "latency_ms": db_latency
         },
+        "database_connected": db_ok,
         "scheduler": {
             "running": sched_running,
             "jobs_count": len(scheduler_jobs),
@@ -3417,8 +3428,8 @@ async def ai_usage_stats(db: Session = Depends(get_db), current_user: dict = Dep
 
 # ─── Audit Trail API ──────────────────────────────────────────────────
 
-@app.get("/api/audit")
-@app.get("/api/audit-logs")
+@app.get("/api/audit", dependencies=[Depends(require_roles(["admin", "manager"]))])
+@app.get("/api/audit-logs", dependencies=[Depends(require_roles(["admin", "manager"]))])
 async def get_audit_trail(limit: int = 100, db: Session = Depends(get_db)):
     """Fetch immutable audit records."""
     logs = db.query(AuditLog).order_by(AuditLog.id.desc()).limit(limit).all()
@@ -4314,6 +4325,19 @@ def _sales_order_to_dict(so: SalesOrder, is_privileged: bool = False) -> dict:
             line_data["margin_pct"] = margin_pct
         items_out.append(line_data)
 
+    computed_subtotal = round(sum(it["taxable"] for it in items_out), 2)
+    computed_tax = round(sum(it["tax_amount"] for it in items_out), 2)
+    computed_grand = round(computed_subtotal + computed_tax, 2)
+
+    subtotal = so.total_taxable if (so.total_taxable is not None and so.total_taxable > 0) else computed_subtotal
+    tax = so.total_tax if (so.total_tax is not None and so.total_tax > 0) else computed_tax
+    grand = so.grand_total if (so.grand_total is not None and so.grand_total > 0) else computed_grand
+
+    if not so.total_taxable or not so.grand_total:
+        so.total_taxable = subtotal
+        so.total_tax = tax
+        so.grand_total = grand
+
     return {
         "id": so.id,
         "order_no": so.order_no,
@@ -4328,9 +4352,13 @@ def _sales_order_to_dict(so: SalesOrder, is_privileged: bool = False) -> dict:
         "valid_until": so.valid_until or "",
         "notes": so.notes or "",
         "override_reason": so.override_reason or "",
-        "total_taxable": so.total_taxable,
-        "total_tax": so.total_tax,
-        "grand_total": so.grand_total,
+        "total_taxable": subtotal,
+        "subtotal": subtotal,
+        "total_tax": tax,
+        "total_gst": tax,
+        "grand_total": grand,
+        "total_amount": grand,
+        "total": grand,
         "items": items_out
     }
 
@@ -4342,6 +4370,32 @@ def _invoice_to_dict(inv: Invoice) -> dict:
     ]
     paid_sum = round(sum(p["amount"] for p in payments), 2)
     bal_due = max(0.0, round(inv.total - paid_sum, 2))
+    taxable = inv.taxable_value or 0.0
+    total = inv.total or 0.0
+    cgst = inv.cgst or 0.0
+    sgst = inv.sgst or 0.0
+    igst = inv.igst or 0.0
+
+    if (taxable == 0 or total == 0) and inv.order and inv.order.items:
+        items_taxable = round(sum(it.qty * it.unit_price * (1.0 - (it.discount_pct / 100.0)) for it in inv.order.items), 2)
+        items_tax = round(sum((it.qty * it.unit_price * (1.0 - (it.discount_pct / 100.0))) * (it.gst_rate / 100.0) for it in inv.order.items), 2)
+        taxable = items_taxable
+        total = round(items_taxable + items_tax, 2)
+        is_intra = (inv.place_of_supply or "").strip().lower() in ("haryana", "")
+        if is_intra:
+            cgst = round(items_tax / 2.0, 2)
+            sgst = round(items_tax / 2.0, 2)
+            igst = 0.0
+        else:
+            cgst = 0.0
+            sgst = 0.0
+            igst = items_tax
+        inv.taxable_value = taxable
+        inv.cgst = cgst
+        inv.sgst = sgst
+        inv.igst = igst
+        inv.total = total
+
     return {
         "id": inv.id,
         "invoice_no": inv.invoice_no,
@@ -4354,14 +4408,14 @@ def _invoice_to_dict(inv: Invoice) -> dict:
         "customer_city": inv.customer.city if inv.customer else "",
         "date": inv.date,
         "place_of_supply": inv.place_of_supply,
-        "taxable_value": inv.taxable_value,
-        "cgst": inv.cgst,
-        "sgst": inv.sgst,
-        "igst": inv.igst,
-        "total": inv.total,
+        "taxable_value": taxable,
+        "cgst": cgst,
+        "sgst": sgst,
+        "igst": igst,
+        "total": total,
         "status": inv.status,
         "paid_amount": paid_sum,
-        "balance_due": bal_due,
+        "balance_due": max(0.0, round(total - paid_sum, 2)),
         "payments": payments
     }
 
@@ -5988,7 +6042,16 @@ async def api_pricing_plans():
     """Return configurable SaaS subscription tiers and features."""
     return {"plans": DEFAULT_SUBSCRIPTION_PLANS}
 
+class UnitEconomicsPayload(BaseModel):
+    plan_price_monthly: Optional[float] = 9999.0
+    hosting_server_per_customer: Optional[float] = 650.0
+    llm_ai_tokens_per_customer: Optional[float] = 450.0
+    whatsapp_cloud_api_per_customer: Optional[float] = 300.0
+    support_ops_per_customer: Optional[float] = 1200.0
+    fixed_overhead_monthly: Optional[float] = 45000.0
+
 @app.post("/api/business-impact/unit-economics", dependencies=[Depends(require_roles(["admin", "manager"]))])
-async def api_unit_economics(payload: dict):
+async def api_unit_economics(payload: Optional[UnitEconomicsPayload] = None):
     """Calculate unit economics, contribution margins, and break-even customer count."""
-    return calculate_unit_economics(payload)
+    data = payload.model_dump(exclude_unset=True) if payload else {}
+    return calculate_unit_economics(data)

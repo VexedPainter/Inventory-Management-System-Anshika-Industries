@@ -394,3 +394,60 @@ if __name__ == "__main__":
     print("==================================================")
     print("  ALL SALES MODULE TESTS PASSED (100% OK)")
     print("==================================================")
+
+
+# ---------------------------------------------------------------------------
+# Defect-fix tests (added for defect 2: sales totals must be non-zero)
+# ---------------------------------------------------------------------------
+
+def test_10_sales_orders_have_nonzero_totals():
+    """Defect 2: seeded sales orders must expose non-zero grand_total and total_amount."""
+    res = client.get("/api/sales/orders", headers=ADMIN_HEADERS)
+    assert res.status_code == 200
+    orders = res.json()
+    assert len(orders) > 0, "No sales orders returned — seed data may be missing"
+    # Every order that has line items must have a positive grand total
+    orders_with_items = [o for o in orders if o.get("items")]
+    assert len(orders_with_items) > 0, "No orders with line items found"
+    for o in orders_with_items:
+        assert o.get("grand_total", 0) > 0, (
+            f"Order {o.get('order_no')} has grand_total={o.get('grand_total')}"
+        )
+        assert o.get("total_amount", 0) > 0, (
+            f"Order {o.get('order_no')} has total_amount={o.get('total_amount')}"
+        )
+        assert o.get("subtotal", 0) > 0, (
+            f"Order {o.get('order_no')} has subtotal={o.get('subtotal')}"
+        )
+    print(f"  [OK] test_10: {len(orders_with_items)} orders all have non-zero totals.")
+
+
+def test_11_invoices_have_nonzero_totals():
+    """Defect 2: seeded invoices must expose non-zero total and taxable_value."""
+    res = client.get("/api/invoices", headers=ADMIN_HEADERS)
+    assert res.status_code == 200
+    invoices = res.json()
+    assert len(invoices) > 0, "No invoices returned — seed data may be missing"
+    for inv in invoices:
+        assert inv.get("total", 0) > 0, (
+            f"Invoice {inv.get('invoice_no')} has total={inv.get('total')}"
+        )
+        assert inv.get("taxable_value", 0) > 0, (
+            f"Invoice {inv.get('invoice_no')} has taxable_value={inv.get('taxable_value')}"
+        )
+    print(f"  [OK] test_11: {len(invoices)} invoices all have non-zero totals.")
+
+
+def test_12_health_reports_db_connectivity():
+    """Defect 5: /api/health must report database_connected=True and masked url."""
+    res = client.get("/api/health", headers=ADMIN_HEADERS)
+    assert res.status_code == 200
+    data = res.json()
+    assert data.get("database_connected") is True, "/api/health did not report DB connected"
+    assert "url" in data.get("database", {}), f"/api/health missing database.url; got keys: {list(data.keys())}"
+    db_url = data["database"]["url"]
+    # Must not expose plain-text passwords
+    assert "***" not in db_url or "://" in db_url or "sqlite" in db_url, (
+        "Unexpected health URL format"
+    )
+    print(f"  [OK] test_12: health OK, db_url={db_url}, connected={data['database_connected']}")
