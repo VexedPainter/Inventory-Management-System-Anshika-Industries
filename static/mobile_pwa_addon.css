@@ -1,0 +1,287 @@
+
+/* ============================================================
+   MOBILE PWA ADD-ON  — Anishka Inventory v7.1
+   Added for phone-friendly storekeeper UX (PWA, scanner, cycle count)
+   ============================================================ */
+
+/* ---- Offline / PWA ---- */
+#offline-banner {
+  display: none;
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 9999;
+  background: var(--molten, #FF7A1A);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  padding: 7px 12px;
+}
+body.is-offline #offline-banner { display: block; }
+
+#pending-pill {
+  display: none;
+  align-items: center;
+  gap: 5px;
+  background: var(--molten, #FF7A1A);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 9px;
+  border-radius: 20px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+#pending-pill.has-pending { display: flex; }
+
+/* ---- Scan FAB ---- */
+#scan-fab {
+  display: none;
+  position: fixed;
+  bottom: 76px; right: 18px;
+  z-index: 800;
+  width: 56px; height: 56px;
+  border-radius: 50%;
+  background: var(--accent, #3DA9FF);
+  border: none;
+  box-shadow: 0 4px 16px rgba(0,0,0,.45);
+  cursor: pointer;
+  align-items: center; justify-content: center;
+  font-size: 24px;
+  color: #fff;
+  transition: transform .15s;
+}
+#scan-fab:active { transform: scale(.93); }
+
+/* ---- Bottom Nav (mobile only) ---- */
+#mobile-bottom-nav {
+  display: none;
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  height: 62px;
+  background: var(--bg-card, #1A1D23);
+  border-top: 1px solid var(--border, #2A2D35);
+  z-index: 700;
+  justify-content: space-around;
+  align-items: center;
+}
+.mob-nav-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  background: none;
+  border: none;
+  color: var(--text-subtle, #6B7280);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  min-width: 56px;
+  min-height: 48px;
+  justify-content: center;
+  border-radius: 10px;
+  transition: color .15s, background .15s;
+}
+.mob-nav-btn .mn-icon { font-size: 22px; line-height: 1; }
+.mob-nav-btn.active { color: var(--accent, #3DA9FF); background: rgba(61,169,255,.12); }
+
+/* ---- Scanner Modal ---- */
+#scanner-modal .modal-box { max-width: 480px; }
+#scanner-video-wrap {
+  width: 100%; aspect-ratio: 1;
+  background: #000;
+  border-radius: 10px;
+  overflow: hidden;
+  position: relative;
+}
+#scanner-video-wrap video,
+#scanner-video-wrap canvas { width: 100%; height: 100%; object-fit: cover; position: absolute; top:0;left:0; }
+#scanner-laser {
+  position: absolute;
+  left: 10%; right: 10%;
+  height: 2px;
+  background: rgba(61,169,255,.75);
+  box-shadow: 0 0 8px rgba(61,169,255,.6);
+  animation: scanline 2s ease-in-out infinite;
+  top: 50%;
+}
+@keyframes scanline {
+  0%,100% { top: 20%; } 50% { top: 80%; }
+}
+#scanner-status { font-size: 13px; color: var(--text-subtle); min-height: 20px; }
+#scanner-manual-wrap { display: flex; gap: 8px; }
+#scanner-manual-wrap input { flex: 1; }
+
+/* ---- Quick Action Sheet ---- */
+#quick-action-sheet {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  z-index: 1100;
+  background: var(--bg-card, #1A1D23);
+  border-radius: 20px 20px 0 0;
+  padding: 16px 20px 32px;
+  box-shadow: 0 -4px 24px rgba(0,0,0,.5);
+  transform: translateY(100%);
+  transition: transform .28s cubic-bezier(.4,0,.2,1);
+}
+#quick-action-sheet.open { transform: translateY(0); }
+#quick-action-sheet .qs-pill {
+  width: 40px; height: 4px;
+  background: var(--border, #2A2D35);
+  border-radius: 2px;
+  margin: 0 auto 14px;
+}
+#qs-item-name { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+#qs-item-meta { font-size: 12px; color: var(--text-subtle); margin-bottom: 16px; }
+.qs-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.qs-btn {
+  display: flex; flex-direction: column; align-items: center; gap: 5px;
+  padding: 14px 8px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-region);
+  color: var(--text-primary);
+  font-size: 13px; font-weight: 600;
+  cursor: pointer;
+  transition: background .15s;
+}
+.qs-btn:active { background: var(--bg-hover); }
+.qs-btn .qs-icon { font-size: 22px; }
+.qs-btn.qs-in { border-color: var(--in); color: var(--in); }
+.qs-btn.qs-out { border-color: var(--out); color: var(--out); }
+.qs-btn.qs-adj { border-color: var(--warn); color: var(--warn); }
+.qs-btn.qs-info { border-color: var(--accent); color: var(--accent); }
+#qs-overlay {
+  display: none;
+  position: fixed;
+  inset: 0; z-index: 1050;
+  background: rgba(0,0,0,.55);
+}
+#qs-overlay.open { display: block; }
+
+/* ---- Offline Queue Panel ---- */
+#offline-queue-panel .modal-box { max-width: 560px; }
+.oq-item {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 0; border-bottom: 1px solid var(--border);
+}
+.oq-item:last-child { border-bottom: none; }
+.oq-status-dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 4px; flex-shrink: 0; }
+.oq-status-dot.pending { background: var(--warn); }
+.oq-status-dot.failed  { background: var(--out); }
+.oq-status-dot.done    { background: var(--in); }
+.oq-desc { flex: 1; font-size: 13px; }
+.oq-err  { font-size: 11px; color: var(--out); margin-top: 3px; }
+
+/* ---- Cycle Count Tab ---- */
+#cc-status-badge {
+  font-size: 11px; font-weight: 700; padding: 2px 8px;
+  border-radius: 10px; text-transform: uppercase;
+}
+.cc-status-open     { background: rgba(61,169,255,.15); color: var(--accent); }
+.cc-status-submitted { background: rgba(255,122,26,.15); color: var(--molten); }
+.cc-status-approved  { background: rgba(45,212,191,.15); color: var(--in); }
+.cc-status-rejected  { background: rgba(239,68,68,.15);  color: var(--out); }
+.cc-status-posted    { background: rgba(45,212,191,.2);  color: var(--in); }
+
+.cc-variance-pos { color: var(--warn); font-weight: 700; }
+.cc-variance-neg { color: var(--out); font-weight: 700; }
+.cc-variance-zero { color: var(--text-subtle); }
+
+#tab-cycle-count .cc-list-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+#tab-cycle-count .cc-list-header {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  color: var(--text-subtle);
+}
+
+/* ---- Mobile Card Layout ---- */
+.mobile-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mc-top { display: flex; justify-content: space-between; align-items: flex-start; }
+.mc-sku { font-size: 11px; color: var(--text-subtle); font-family: monospace; }
+.mc-name { font-size: 15px; font-weight: 700; }
+.mc-meta { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--text-subtle); }
+.mc-meta span { display: flex; align-items: center; gap: 4px; }
+.mc-actions { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+.mc-actions .btn { font-size: 12px; padding: 6px 12px; min-height: 36px; }
+
+/* ---- Label Print Buttons ---- */
+.label-print-bar {
+  display: flex; gap: 8px; flex-wrap: wrap;
+  padding: 8px 0;
+}
+
+/* ---- @media: Mobile (<= 768px) ---- */
+@media (max-width: 768px) {
+  /* Show bottom nav + scan FAB */
+  #mobile-bottom-nav { display: flex !important; }
+  #scan-fab { display: flex !important; }
+
+  /* Adjust main layout for bottom nav */
+  .app-shell { padding-bottom: 70px; }
+  .content-area { padding-bottom: 70px; }
+
+  /* Hide sidebar text, collapse */
+  .sidebar { width: 0; min-width: 0; overflow: hidden; padding: 0; }
+  .sidebar-toggle { display: none; }
+
+  /* Full-width content */
+  .main-area { margin-left: 0 !important; width: 100%; }
+
+  /* Touch targets */
+  .btn, button, select, input[type="text"],
+  input[type="number"], input[type="search"] {
+    min-height: 44px;
+  }
+  .btn { padding: 10px 16px; }
+
+  /* Header adjustments */
+  .app-header { padding: 10px 14px; gap: 10px; }
+  .app-header .header-title { font-size: 15px; }
+
+  /* Hide dense tables, show cards */
+  .table-responsive { display: none !important; }
+  .mobile-cards-wrap { display: flex !important; flex-direction: column; gap: 10px; }
+
+  /* Tab content padding */
+  .tab-content, section.tab { padding: 14px 12px; }
+
+  /* Stats grid: single column */
+  .stats-grid, .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr !important; }
+
+  /* Modals full-screen */
+  .modal-box { margin: 0; border-radius: 16px 16px 0 0; max-height: 92vh; overflow-y: auto; width: 100% !important; max-width: 100% !important; }
+  .modal-overlay { align-items: flex-end; }
+
+  /* Scanner elements */
+  #scanner-modal .modal-box { border-radius: 16px 16px 0 0; }
+
+  /* Cycle count detail table horizontal scroll */
+  #cc-detail-table-wrap { overflow-x: auto; }
+
+  /* Filters collapse */
+  .filter-bar { flex-direction: column; gap: 8px; }
+  .filter-bar input, .filter-bar select { width: 100%; }
+}
+
+@media (min-width: 769px) {
+  /* Hide mobile-only elements on desktop */
+  #mobile-bottom-nav { display: none !important; }
+  #scan-fab { display: none !important; }
+  .mobile-cards-wrap { display: none !important; }
+}

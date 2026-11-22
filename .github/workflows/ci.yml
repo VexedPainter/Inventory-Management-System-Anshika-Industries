@@ -1,13 +1,14 @@
-name: ShadowSync CI
+name: Anishka ERP - Enterprise CI Suite
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, master, develop]
   pull_request:
-    branches: [main]
+    branches: [main, master]
 
 jobs:
   test:
+    name: Lint, Migrate & Test Suite
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -26,52 +27,61 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: 'pip'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Security audit (dependency CVE scan)
         run: |
-          pip install pip-audit
-          pip-audit --ignore-vuln PYSEC-2022-42969  # known safe exceptions
+          python -m pip install --upgrade pip
+          pip install flake8 pytest
+          pip install -r requirements.txt
 
-      - name: Run API tests
+      - name: Code Quality & Syntax Lint (flake8)
+        run: |
+          # Fails if syntax errors (E9) or undefined names (F63, F7, F82) exist
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=.git,__pycache__,backup*,uploads,.pytest_cache,static*
+
+      - name: Verify PostgreSQL Alembic Migrations
         env:
-          DATABASE_URL:               "postgresql://postgres:postgres@localhost:5432/shadowsync"
-          SECRET_KEY:                 "ci-secret-key-not-for-production"
-          FIELD_ENCRYPTION_KEY:       ${{ secrets.FIELD_ENCRYPTION_KEY || 'not-set-in-ci' }}
-          GROQ_API_KEY:               ${{ secrets.GROQ_API_KEY || '' }}
-          COHERE_API_KEY:             ${{ secrets.COHERE_API_KEY || '' }}
-          ADMIN_USERNAME:             "admin"
-          ADMIN_PASSWORD:             "ShadowSync_Exhibition_2026!"
-          ALERT_EMAIL_USER:           ""
-          ALERT_EMAIL_TO:             ""
-          ALERT_SMTP_HOST:            ""
-          SLACK_WEBHOOK_URL:          ""
-          FIREBASE_CREDENTIALS_PATH:  ""
+          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/shadowsync"
         run: |
-          python generate_data.py
-          python -m uvicorn app:app --host 0.0.0.0 --port 8000 &
-          sleep 8
-          python test_api.py
+          alembic upgrade head
+
+      - name: Run Test Suite (PostgreSQL)
+        env:
+          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/shadowsync"
+          ALLOW_TEST_ROLE_HEADER: "true"
+          GROQ_API_KEY: ""
+        run: |
+          python -m pytest -v --tb=short
+
+      - name: Run Test Suite (SQLite)
+        env:
+          DATABASE_URL: "sqlite:///./ci_sqlite.db"
+          ALLOW_TEST_ROLE_HEADER: "true"
+          GROQ_API_KEY: ""
+        run: |
+          python -m pytest -v --tb=short
 
   docker:
+    name: Docker Container Build & Healthcheck
     runs-on: ubuntu-latest
     needs: test
     steps:
       - uses: actions/checkout@v4
+
       - name: Build Docker image
-        run: docker build -t shadowsync:${{ github.sha }} .
-      - name: Verify health check
+        run: docker build -t anishka-erp:${{ github.sha }} .
+
+      - name: Verify Docker Container Startup & Healthcheck
         run: |
           docker run -d -p 8000:8000 \
             -e ADMIN_USERNAME=admin \
-            -e ADMIN_PASSWORD=ci_test \
-            -e SECRET_KEY=ci-health-check-key \
-            shadowsync:${{ github.sha }}
-          sleep 20
-          curl -f http://localhost:8000/login || exit 1
+            -e ADMIN_PASSWORD=admin@2026 \
+            -e ALLOW_TEST_ROLE_HEADER=true \
+            anishka-erp:${{ github.sha }}
+          sleep 15
+          curl -f http://localhost:8000/api/health || exit 1

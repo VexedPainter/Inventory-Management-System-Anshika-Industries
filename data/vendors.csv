@@ -1,22 +1,15 @@
 id,name,category,risk_level,approved,avg_order
-V001,Industrial Parts Express,MRO Supplies,Low,True,1200
-V002,Fastener World,Fasteners,Low,True,350
-V003,Emergency Hardware Supply,General Hardware,High,False,900
-V004,Global Logistics Corp,Logistics,Low,True,2500
-V005,Precision Tools Inc,Tooling,Medium,True,750
-V006,QuickFix Parts Shop,General Hardware,High,False,200
-V007,TechnoElec Solutions,Electronics,Medium,True,1800
-V008,SafetyFirst Equipment,Safety,Low,True,600
-V009,HydroFlow Systems,Hydraulics,Low,True,2200
-V010,WeldPro Supplies,Welding,Low,True,480
-V011,AirTech HVAC,HVAC,Medium,True,1400
-V012,Bob's Hardware Store,General Hardware,High,False,120
-V013,Pacific Bearing Co,Bearings,Low,True,900
-V014,National Electric Supply,Electronics,Low,True,1600
-V015,Midnight Auto Parts,General Hardware,High,False,300
-V016,ChemGuard Industrial,Chemicals,Medium,True,550
-V017,SteelCraft Manufacturing,Raw Materials,Low,True,3500
-V018,Joe's Corner Shop,General Hardware,High,False,80
-V019,PumpMaster International,Pumps,Low,True,4200
-V020,GasketPro Ltd,Seals & Gaskets,Medium,True,350
-V021,Random Online Seller,Unknown,High,False,150
+V001,Abicor Binzel Tech India,MIG & Robotic Spares,Low,True,125000
+V002,Panasonic Smart Factory Solutions,Robotic Systems & Torches,Low,True,340000
+V003,Fronius India Welding,High-End MIG/TIG Spares,Low,True,280000
+V004,ESAB India Limited,Welding Consumables & Torches,Low,True,180000
+V005,Ador Welding Limited,Tungsten & Filler Rods,Low,True,95000
+V006,TBi Industries India,MIG Torches & Liners,Low,True,110000
+V007,Kemppi India Spares,Welding Guns & Cables,Medium,True,165000
+V008,D&H Secheron Electrodes,Tungsten Electrodes & Wires,Low,True,85000
+V009,Anand Arc Wires & Consumables,MIG Wire Spools,Low,True,145000
+V010,Weldcraft TIG Systems,TIG Torches & Gas Lens,Low,True,72000
+V011,OTC Daihen India Spares,Robotic Swan Necks & Reamers,Medium,True,290000
+V012,Yaskawa Motoman Parts India,Robotic Cable Conduits,Low,True,215000
+V013,Local Industrial Hardware Gurugram,General Consumables,Medium,True,25000
+V014,Haryana Precision Tools,Reamer Blades & Fixtures,Medium,True,42000

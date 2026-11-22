@@ -1,570 +1,145 @@
+import time
 """
-FastAPI server for Shadow Supply Chain Detection System v3.0.
-Features: REST API, PDF downloads, WebSocket real-time updates,
-          transaction simulator, decision recommendations,
-          human feedback loop, real-time risk analytics.
+FastAPI Server for Anishka Inventory Management System v7.0.
+Enterprise stock control for Anishka Industries (Khandsa Road, Sector-10, Gurugram).
+Specialized in MIG, TIG, and Robotics Welding Spares.
+
+Features:
+- REST API & Real-time WebSocket updates
+- JWT/Cookie Authentication & Role-Based Access Control (RBAC)
+- Multi-format Reports (PDF, Excel, CSV)
+- Groq AI Inventory & Technical Copilot
+- Live Stock Movement Simulator
 """
-# Load .env file BEFORE any os.environ.get() calls so API keys are available.
-# python-dotenv is a dev/prod dependency — add it via: pip install python-dotenv
-from dotenv import load_dotenv
-load_dotenv()  # reads .env from the project root into os.environ
-
-from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Request, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response, RedirectResponse, JSONResponse
-from sqlalchemy.orm import Session
-from pydantic import BaseModel, Field
-from typing import Optional, Literal
-from sqlalchemy import func
-import os, json, asyncio, random, datetime, tempfile, io, csv, secrets
-import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, numbers
-from openpyxl.utils import get_column_letter
-from openpyxl.cell.cell import MergedCell
-from collections import defaultdict
-from production_data import SF_REAL_SCENARIOS  # noqa: E402  real-world scenario pool
-
-# Controls which scenario pool the background simulator draws from.
-DATASET_MODE: str = os.environ.get("DATASET_MODE", "default")
-# ─── ENCRYPTION (B5) ──────────────────────────────────
-from cryptography.fernet import Fernet as _Fernet
-
-_raw_fernet_key = os.environ.get("FIELD_ENCRYPTION_KEY", "")
-_CI_SENTINEL    = "not-set-in-ci"
-
-if not _raw_fernet_key or _raw_fernet_key == _CI_SENTINEL:
-    _fernet = None  # Encryption disabled — no key provided
-    import logging as _log
-    _log.getLogger("shadowsync").info(
-        "[INFO] Field encryption disabled (FIELD_ENCRYPTION_KEY not set). "
-        "Set a valid Fernet key in .env for production use."
-    )
-else:
-    try:
-        _fernet = _Fernet(_raw_fernet_key.encode() if isinstance(_raw_fernet_key, str) else _raw_fernet_key)
-    except Exception:
-        # Key is set but malformed — generate ephemeral key so app starts
-        _fernet = _Fernet(_Fernet.generate_key())
-        import logging as _log
-        _log.getLogger("shadowsync").warning(
-            "[WARN] FIELD_ENCRYPTION_KEY is malformed — using ephemeral key. "
-            "Encrypted fields will NOT persist across restarts."
-        )
-
-
-def encrypt(value: str) -> str:
-    if not _fernet or not value: return value
-    return _fernet.encrypt(value.encode()).decode()
-
-def decrypt(value: str) -> str:
-    if not _fernet or not value: return value
-    try: return _fernet.decrypt(value.encode()).decode()
-    except Exception: return value
-
-
-# Pydantic models for Priority Queue
-class PriorityItem(BaseModel):
-    id: int
-    transaction_id: str
-    priority_score: float
-    risk_score: float
-    estimated_loss: float
-    confidence_score: float
-    frequency: int
-    priority_label: str
-
-
-from database import (
-    SessionLocal, init_db, Transaction, Procurement, ShadowPurchase,
-    Vendor, Inventory, RiskSnapshot, RiskMetric, ActionRecommendation,
-    BehaviorMetric, UserFeedback, AuditLog, TrendMetric, ActionLog,
-    InventoryConfidence, RetrievalLog, EmergencyDecisionLog,
-    UnifiedEvent, LivingRiskScore, InventoryCorrectionLedger, TrustMomentum,
-    VerificationTask, ConfidenceDecayLog,
-    InventoryLocations, WarehouseTransferCosts, ShiftRoster, WarehouseAccess,
-    UserRole, ROLE_PERMISSIONS,           # B4: RBAC
-    VendorContract, InventoryItem, PurchaseOrderDraft  # F6, F7
-)
-
-from detection import run_detection, resolve_shadow_purchase, get_recommendations
-from pdf_generator import generate_document_pdf, generate_bulk_pdf, generate_dashboard_report_pdf
-
-
-from ai_copilot import (
-    chat_with_groq, analyze_shadow_with_groq,
-    summarize_risks_with_cohere, classify_risk_with_cohere,
-    generate_vendor_insight_with_cohere, check_ai_health
-)
-import traceback
+import os
+import io
+import csv
+import json
+import random
+import secrets
+import asyncio
+import datetime
+import tempfile
 import logging
-import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-from production_data import SF_REAL_SCENARIOS
-from vendor_graph import vendor_ring_detector, supplier_network_graph  # F5
-from ai_module import shadow_ai, check_contract_compliance             # F6
-from analytics import predict_department_risk                          # F4
-from connectors.push import push_to_mobile                             # F10 stub
-
-# ─── B3: Alert Infrastructure Imports ────────────────────────────────
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-
-# ─── B7: Multi-Currency Exchange Rates ──────────────────────────────
-EXCHANGE_RATES = {
-    "USD": 1.0,
-    "EUR": 1.08,
-    "GBP": 1.27,
-    "INR": 0.012,
-    "CAD": 0.74,
-    "AUD": 0.65,
-    "SGD": 0.74,
-    "AED": 0.27,
-    "JPY": 0.0066,
-    "CHF": 1.11,
-}
-
-def normalize_to_usd(amount: float, currency: str) -> float:
-    """Convert any supported currency to USD for ML scoring consistency."""
-    rate = EXCHANGE_RATES.get(currency.upper(), 1.0)
-    return round(amount * rate, 2)
-
-# --- EXPORT CONFIGURATION ---
-EXPORT_SCHEMA = [
-    "transaction_id",
-    "vendor",
-    "amount",
-    "currency",
-    "status",
-    "risk_score",
-    "created_at"
-]
-
-AI_FIELDS = [
-    "ai_reasoning",
-    "ai_confidence",
-    "ai_model"
-]
-
-DOWNLOAD_DIR = os.path.join(os.path.dirname(__file__), "static", "downloads")
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-
-def generate_filename(feature: str, ext: str) -> str:
-    """Standardized filename: Nexus_[Feature]_[YYYY-MM-DD]_[HHMMSS].[ext]"""
-    now = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    return f"Nexus_{feature.capitalize()}_{now}.{ext}"
-
+from collections import defaultdict
+from typing import Optional, Literal
 from contextlib import asynccontextmanager
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    init_db()
-    print("Shadow Supply Chain Detection System v3.0 (Real-Time) ready.")
-    print("Dashboard: http://localhost:8000")
-    task = asyncio.create_task(simulate_transactions())
-    decay_task = asyncio.create_task(confidence_decay_job())
-    recal_task = asyncio.create_task(recalibration_job())
+from dotenv import load_dotenv
+load_dotenv()
 
-    # F12: APScheduler — monthly data retention purge
-    from apscheduler.schedulers.asyncio import AsyncIOScheduler
-    scheduler = AsyncIOScheduler()
-    def _scheduled_purge():
-        db = next(get_db())
-        try:
-            purge_old_records(db)
-        finally:
-            db.close()
-    scheduler.add_job(_scheduled_purge, trigger="interval", days=30, id="monthly_purge")
-    scheduler.start()
+from fastapi import (
+    FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect,
+    Request, Response, UploadFile, status, File, Form, Query
+)
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, Response, RedirectResponse, JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+from sqlalchemy import func
 
-    yield
-
-    global simulator_running
-    simulator_running = False
-    task.cancel()
-    decay_task.cancel()
-    recal_task.cancel()
-    scheduler.shutdown(wait=False)
-
-app = FastAPI(title="Nexus Supply Integrity Enterprise", version="5.0.0", lifespan=lifespan)
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-
-limiter = Limiter(key_func=get_remote_address)
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
 from starlette.middleware.base import BaseHTTPMiddleware
 
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """Add standard security headers to every response."""
-    async def dispatch(self, request, call_next):
-        response = await call_next(request)
-        response.headers["X-Content-Type-Options"]    = "nosniff"
-        response.headers["X-Frame-Options"]            = "DENY"
-        response.headers["X-XSS-Protection"]           = "1; mode=block"
-        response.headers["Referrer-Policy"]             = "strict-origin-when-cross-origin"
-        response.headers["Permissions-Policy"]          = "geolocation=(), microphone=()"
-        if request.url.scheme == "https":
-            response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
-        return response
-
-
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    # Log full detail server-side only — never send stack traces to clients
-    logger.error(f"Global exception on {request.method} {request.url.path}: {exc}", exc_info=True)
-    return JSONResponse(
-        status_code=500,
-        content={"message": "Internal Server Error"},
-    )
-
-app.add_middleware(
-    CORSMiddleware, 
-    allow_origins=os.environ.get("ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000").split(","),
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
-    expose_headers=["Content-Disposition"]
+from database import (
+    SessionLocal, init_db, Vendor, Inventory, Procurement,
+    StockMovement, POItem, AuditLog,
+    UserRole, ROLE_PERMISSIONS, AppSetting, AutomationRun, Outbox, seed_default_settings,
+    Customer, SalesOrder, SalesOrderItem, Invoice, Payment,
+    DocExtraction, CycleCount, CycleCountItem
 )
-app.add_middleware(SecurityHeadersMiddleware)
-app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from pdf_generator import (
+    generate_document_pdf, generate_bulk_pdf, generate_dashboard_report_pdf,
+    generate_low_stock_report_pdf, generate_dispatch_note_pdf,
+    generate_tax_invoice_pdf, generate_quotation_pdf, number_to_indian_currency_words,
+    generate_item_labels_pdf, generate_bin_labels_pdf
+)
+from doc_scanner import (
+    save_uploaded_document, extract_document_data, match_extraction_with_po,
+    confirm_and_receive_delivery, get_scan_accuracy_report,
+    CANNED_SAMPLES, UPLOAD_DIR, SAMPLES_DIR, DeliveryDocExtraction
+)
+from preventive_intelligence import (
+    compute_item_status, compute_items_status_map,
+    check_and_trigger_auto_reorder, calculate_forecast,
+    find_smart_alternatives, check_and_apply_auto_approval,
+    ensure_replenishment, queue_po_approval_email,
+    compute_suggested_reorder_level, get_dead_stock_analysis,
+    generate_daily_digest,
+    compute_abc_xyz_classification, calculate_advanced_forecast,
+    compute_safety_stock_rop, compute_what_if_simulation,
+    compute_business_kpis, detect_robust_z_anomalies,
+    seed_twelve_month_analytics_history
+)
+from sales_opportunities import (
+    clean_whatsapp_phone,
+    build_whatsapp_link,
+    get_whatsapp_template,
+    compute_sales_opportunities,
+    send_or_simulate_whatsapp_message,
+    compute_sales_funnel
+)
+from security_manager import (
+    LOCKOUT_MINUTES,
+    hash_password, verify_password, needs_rehash, is_default_password,
+    validate_password_complexity, check_rate_limit, record_failed_login,
+    record_successful_login, reset_all_rate_limits, SECURITY_HEADERS, get_cookie_params
+)
+from backup_manager import (
+    create_backup, list_backups, restore_backup, clean_old_backups, BACKUP_DIR
+)
+from import_wizard import (
+    parse_file_to_dataframe, auto_map_columns, validate_import_data,
+    commit_import_batch, rollback_import_batch, list_import_batches,
+    generate_template
+)
+from structured_logging import StructuredLoggingMiddleware
+from database import ImportBatch
 
+from business_reports import (
+    get_gst_sales_register,
+    get_gst_purchase_register,
+    get_gstr1_summary,
+    get_hsn_summary,
+    export_sales_register_csv,
+    export_purchase_register_csv,
+    export_gstr1_b2b_csv,
+    export_gstr1_b2c_csv,
+    export_hsn_summary_csv,
+    get_tally_ledger_settings,
+    save_tally_ledger_settings,
+    generate_tally_xml_vouchers,
+    generate_tally_csv_vouchers,
+    compute_owner_summary_metrics,
+    generate_owner_summary_narrative,
+    generate_owner_summary_pdf,
+    dispatch_owner_summary_outbox,
+    get_dashboard_owner_summary,
+    STATUTORY_GST_NOTICE
+)
+from ai_copilot import run_chat_agent, stream_chat_agent, check_ai_health, AIChatLog
 
-# ─── Pydantic Models ───────────────────────────────────
-class FeedbackRequest(BaseModel):
-    shadow_id: int
-    category: Optional[str] = None
-    revised_score: Optional[float] = None
-    notes: Optional[str] = None
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("anishka_inventory")
 
-
-class LoginRequest(BaseModel):
-    username: str
-    password: str
-
-# ─── Auth Logic ─────────────────────────────────────────
-# Sessions stored in-memory; migrate to Redis for multi-instance deployments.
-AUTHENTICATED_SESSIONS: dict[str, datetime.datetime] = {}   # token → created_at
-SESSION_TTL_HOURS = 12   # Sessions expire after 12 hours of inactivity
-
+# ─── Security & Authentication ───────────────────────────────────────
+ALLOW_TEST_ROLE_HEADER = os.getenv("ALLOW_TEST_ROLE_HEADER", "false").lower() in ("true", "1", "yes")
+AUTHENTICATED_SESSIONS: dict[str, dict] = {}
+SESSION_TTL_HOURS = 24
 
 def _purge_expired_sessions():
-    """Remove sessions older than SESSION_TTL_HOURS to prevent unbounded memory growth."""
-    cutoff = datetime.datetime.now() - datetime.timedelta(hours=SESSION_TTL_HOURS)
-    expired = [tok for tok, created in list(AUTHENTICATED_SESSIONS.items()) if created < cutoff]
-    for tok in expired:
-        AUTHENTICATED_SESSIONS.pop(tok, None)
-    if expired:
-        logger.info(f"[Auth] Purged {len(expired)} expired session(s)")
-
-
-# Credentials loaded from environment variables. Hardcoded fallback retained
-# only for local development convenience; must be overridden in production via
-# ADMIN_USERNAME / ADMIN_PASSWORD environment variables.
-_DEFAULT_USER = "admin"
-_DEFAULT_PASS = "nexus2026"
-DEMO_CREDENTIALS = {
-    os.environ.get("ADMIN_USERNAME", _DEFAULT_USER): os.environ.get("ADMIN_PASSWORD", _DEFAULT_PASS)
-}
-
-
-def get_current_user(request: Request):
-    token = request.cookies.get("ss_token")
-    if not token or token not in AUTHENTICATED_SESSIONS:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    # Enforce TTL: reject tokens older than SESSION_TTL_HOURS
-    created_at = AUTHENTICATED_SESSIONS[token]
-    if datetime.datetime.now() - created_at > datetime.timedelta(hours=SESSION_TTL_HOURS):
-        AUTHENTICATED_SESSIONS.pop(token, None)
-        raise HTTPException(status_code=401, detail="Session expired — please log in again")
-    return "admin"
-
-
-# ─── B4: Role-Based Permission Checker ────────────────────────────────
-def get_user_role(username: str, db: Session) -> str:
-    """Look up user role; default to 'auditor' (least privilege)."""
-    try:
-        user_role = db.query(UserRole).filter(UserRole.username == username).first()
-        return user_role.role if user_role else "admin"  # default admin for existing sessions
-    except Exception:
-        return "admin"  # graceful fallback if table doesn't exist yet
-
-
-def require_permission(permission: str):
-    """
-    FastAPI dependency: reject request if user's role lacks the required permission.
-    Usage: Depends(require_permission("retrain"))
-    """
-    async def checker(request: Request, db: Session = Depends(get_db)):
-        username = get_current_user(request)  # raises 401 if not authenticated
-        role = get_user_role(username, db)
-        allowed = ROLE_PERMISSIONS.get(role, [])
-        if permission not in allowed:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Role '{role}' is not permitted to '{permission}'. Required role: admin or analyst."
-            )
-        return username
-    return checker
-
-
-# ─── WebSocket Connection Manager ──────────────────────
-class ConnectionManager:
-    def __init__(self):
-        self.connections: list[WebSocket] = []
-
-    async def connect(self, ws: WebSocket):
-        await ws.accept()
-        self.connections.append(ws)
-
-    def disconnect(self, ws: WebSocket):
-        if ws in self.connections:
-            self.connections.remove(ws)
-
-    async def broadcast(self, message: dict):
-        dead = []
-        for ws in self.connections:
-            try:
-                await ws.send_json(message)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self.connections.remove(ws)
-
-    @property
-    def client_count(self):
-        return len(self.connections)
-
-manager = ConnectionManager()
-
-
-# ─── Real-Time Transaction Simulator ───────────────────
-SHADOW_SCENARIOS = [
-    {"vendor": "Emergency Hardware Supply", "desc": "Emergency motor coupling replacement", "dept": "Maintenance", "ptype": "Corporate Card", "holder": "John Miller", "min_amt": 200, "max_amt": 2000},
-    {"vendor": "QuickFix Parts Shop", "desc": "Hydraulic fittings rush order", "dept": "Production", "ptype": "Corporate Card", "holder": "Sarah Chen", "min_amt": 50, "max_amt": 800},
-    {"vendor": "Bob's Hardware Store", "desc": "Misc hardware supplies", "dept": "Facilities", "ptype": "Expense Claim", "holder": "Dave Wilson", "min_amt": 15, "max_amt": 150},
-    {"vendor": "Midnight Auto Parts", "desc": "Drive components for emergency repair", "dept": "Maintenance", "ptype": "Corporate Card", "holder": "John Miller", "min_amt": 100, "max_amt": 1200},
-    {"vendor": "Random Online Seller", "desc": "Specialty replacement part express ship", "dept": "Engineering", "ptype": "Corporate Card", "holder": "Alex Rivera", "min_amt": 80, "max_amt": 3500},
-    {"vendor": "Joe's Corner Shop", "desc": "Consumable supplies night shift", "dept": "Maintenance", "ptype": "Expense Claim", "holder": "Tom Brown", "min_amt": 10, "max_amt": 80},
-    {"vendor": "Emergency Hardware Supply", "desc": "Control valve assembly urgent", "dept": "Maintenance", "ptype": "Corporate Card", "holder": "John Miller", "min_amt": 500, "max_amt": 3000},
-    {"vendor": "QuickFix Parts Shop", "desc": "Bearing replacement set rush", "dept": "Production", "ptype": "Corporate Card", "holder": "Sarah Chen", "min_amt": 100, "max_amt": 600},
-]
-
-NORMAL_SCENARIOS = [
-    {"vendor": "Industrial Parts Express", "desc": "Scheduled parts delivery per PO", "dept": "Maintenance", "ptype": "Invoice", "holder": "System", "min_amt": 200, "max_amt": 5000},
-    {"vendor": "Fastener World", "desc": "Fastener restock order", "dept": "Production", "ptype": "Invoice", "holder": "System", "min_amt": 100, "max_amt": 600},
-    {"vendor": "SafetyFirst Equipment", "desc": "Safety equipment monthly order", "dept": "HSE", "ptype": "Invoice", "holder": "System", "min_amt": 200, "max_amt": 1500},
-    {"vendor": "TechnoElec Solutions", "desc": "Electronic components per PO", "dept": "Engineering", "ptype": "Invoice", "holder": "System", "min_amt": 300, "max_amt": 3000},
-    {"vendor": "WeldPro Supplies", "desc": "Welding consumables restock", "dept": "Fabrication", "ptype": "Invoice", "holder": "System", "min_amt": 100, "max_amt": 800},
-]
-
-simulator_running = False
-
-
-async def confidence_decay_job():
-    """Background task to slowly decay confidence for unverified inventory over time."""
-    print("Confidence Decay Job started.")
-    while True:
-        try:
-            db = SessionLocal()
-            now = datetime.datetime.now()
-            four_hours_ago_str = (now - datetime.timedelta(hours=4)).strftime("%Y-%m-%d %H:%M:%S")
-            
-            confidences = db.query(InventoryConfidence).filter(
-                InventoryConfidence.source == 'ai_auto_update',
-                InventoryConfidence.verification_status.notin_(['verified', 'physically_confirmed'])
-            ).all()
-            
-            for conf in confidences:
-                if not conf.last_verified or conf.last_verified < four_hours_ago_str:
-                    if conf.confidence_score > 0:
-                        old_score = conf.confidence_score
-                        conf.confidence_score = max(0.0, conf.confidence_score - 5.0)
-                        
-                        log = ConfidenceDecayLog(
-                            sku=conf.item_id,
-                            delta=5.0,
-                            reason="Time-based decay (unverified > 4h)",
-                            timestamp=now.strftime("%Y-%m-%d %H:%M:%S")
-                        )
-                        db.add(log)
-                        
-                        if conf.confidence_score < 60.0 and old_score >= 60.0:
-                            v_task = VerificationTask(
-                                sku=conf.item_id,
-                                priority="standard",
-                                reason="confidence_decay_below_threshold",
-                                requested_at=now.strftime("%Y-%m-%d %H:%M:%S")
-                            )
-                            db.add(v_task)
-            
-            db.commit()
-            db.close()
-        except Exception as e:
-            logger.error(f"Confidence decay error: {e}")
-            if 'db' in locals():
-                db.rollback()
-                db.close()
-        await asyncio.sleep(3600)  # Run every 60 minutes
-
-async def recalibration_job():
-    """LP-01: Analyzes false_positive rates and adjusts Vendor.trust_score.
-
-    Bug fix: Previous version used an in-memory `processed_shadow_ids` set that
-    reset to empty on every server restart, causing all feedback to be re-applied
-    on each boot (duplicate trust score adjustments).  Fix: use the DB-persisted
-    `reviewer_verdict` + `reviewed_at` combo as idempotency guard — a shadow's
-    feedback is only applied once, tracked by a new `recalibration_applied`
-    boolean column.  Falls back gracefully if the column is absent (migration).
-    """
-    print("Recalibration Job started.")
-    while True:
-        try:
-            db = SessionLocal()
-            now = datetime.datetime.now()
-
-            # Find reviewed shadows whose feedback has not yet been applied to
-            # vendor trust scores.  We rely on the DB-persisted `recalibration_applied`
-            # flag so restart safety is guaranteed without any in-memory state.
-            try:
-                shadows_with_feedback = db.query(ShadowPurchase).filter(
-                    ShadowPurchase.reviewer_verdict.isnot(None),
-                    ShadowPurchase.needs_review == False,
-                    ShadowPurchase.recalibration_applied == False,   # <-- DB-level guard
-                ).all()
-            except Exception:
-                # Column may not exist yet in older DBs — fall back to reviewed_at guard
-                shadows_with_feedback = db.query(ShadowPurchase).filter(
-                    ShadowPurchase.reviewer_verdict.isnot(None),
-                    ShadowPurchase.needs_review == False,
-                ).all()
-
-            for shadow in shadows_with_feedback:
-                txn = db.query(Transaction).filter(Transaction.id == shadow.transaction_id).first()
-                if txn and txn.vendor:
-                    vendor = db.query(Vendor).filter(Vendor.name == txn.vendor).first()
-                    if vendor:
-                        if shadow.reviewer_verdict == "false_positive":
-                            # False positive → boost vendor trust (was wrongly flagged)
-                            vendor.trust_score = min(100.0, (vendor.trust_score or 50.0) + 2.5)
-                        elif shadow.reviewer_verdict == "confirmed_shadow":
-                            # Confirmed shadow → penalise vendor trust
-                            vendor.trust_score = max(0.0, (vendor.trust_score or 50.0) - 5.0)
-                        db.add(vendor)
-
-                # Mark as applied so it is never re-processed, even across restarts
-                try:
-                    shadow.recalibration_applied = True
-                except Exception:
-                    pass  # Column absent in current schema — skip marking
-
-            db.commit()
-            db.close()
-        except Exception as e:
-            logger.error(f"Recalibration error: {e}")
-            if 'db' in locals():
-                db.rollback()
-                db.close()
-        await asyncio.sleep(3600)  # Run every hour
-
-async def simulate_transactions():
-    """Background task to simulate real-time enterprise transaction flow."""
-    print("Background Transaction Simulator started.")
-    while True:
-        db = SessionLocal()
-        try:
-            # Choose scenario based on mode
-            global DATASET_MODE
-            if DATASET_MODE == "production":
-                scenario = random.choice(SF_REAL_SCENARIOS)
-            else:
-                is_shadow = random.random() < 0.3
-                scenario = random.choice(SHADOW_SCENARIOS) if is_shadow else random.choice(NORMAL_SCENARIOS)
-            
-            txn_id = f"TXN-{random.randint(10000, 99999)}"
-            amount = round(random.uniform(scenario["min_amt"], scenario["max_amt"]), 2)
-            
-            # Real-world data often has much higher amounts; mock is smaller
-            is_detected_shadow = (scenario["ptype"] in ["Corporate Card", "Expense Claim"])
-            
-            # Generate unique transaction ID using timestamp + random suffix
-            unique_id = f"TXN-{int(datetime.datetime.now().timestamp()*1000)}-{random.randint(1000, 9999)}"
-
-            new_txn = Transaction(
-                id=unique_id,
-                date=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                vendor=scenario["vendor"],
-                amount=amount,
-                description=scenario["desc"],
-                payment_type=scenario["ptype"],
-                card_holder=encrypt(scenario["holder"]),
-                department=scenario["dept"],
-                is_shadow=is_detected_shadow,
-                ai_risk_score=round(random.uniform(0.6, 0.95), 2) if is_detected_shadow else 0.05
-            )
-            db.add(new_txn)
-            db.commit()
-            
-            # Run detection logic
-            run_detection(db)
-            
-            if is_detected_shadow:
-                # Broadcast via WebSocket
-                stats = _get_stats_dict(db)
-                await manager.broadcast({
-                    "type": "new_shadow",
-                    "data": {
-                        "id": txn_id,
-                        "vendor": scenario["vendor"],
-                        "amount": amount,
-                        "reason": scenario["desc"]
-                    }
-                })
-                await manager.broadcast({"type": "stats_update", "data": stats})
-
-                # B3: Fire email+Slack alerts for high-risk shadows (risk_score > 0.6)
-                sim_risk = new_txn.ai_risk_score or 0.0
-                if sim_risk > 0.6:
-                    shadow_dict = {
-                        "id": unique_id,
-                        "detected_at": datetime.datetime.now().isoformat(),
-                        "risk_score": sim_risk,
-                        "reason": scenario["desc"],
-                        "priority": "Critical" if sim_risk > 0.8 else "High",
-                    }
-                    txn_dict_alert = {
-                        "vendor": scenario["vendor"],
-                        "amount": amount,
-                        "department": scenario["dept"],
-                    }
-                    asyncio.create_task(send_critical_alert(shadow_dict, txn_dict_alert))
-                    asyncio.create_task(send_slack_alert(shadow_dict, txn_dict_alert))
-            
-            # Check inventory levels for low stock alerts
-            low_stock = db.query(Inventory).filter(Inventory.quantity < Inventory.reorder_level).all()
-            if low_stock:
-                await manager.broadcast({
-                    "type": "alert",
-                    "data": f"{len(low_stock)} items are below reorder level.",
-                    "severity": "High"
-                })
-
-        except Exception as e:
-            logger.error(f"Simulator error: {e}")
-        finally:
-            db.close()
-            
-        await asyncio.sleep(5) # Faster for better demo pacing
-
-
+    now = datetime.datetime.now()
+    expired = [t for t, data in AUTHENTICATED_SESSIONS.items() if (now - data.get("expires", now)).total_seconds() > 0]
+    for t in expired:
+        del AUTHENTICATED_SESSIONS[t]
 
 def get_db():
     db = SessionLocal()
@@ -573,4710 +148,5847 @@ def get_db():
     finally:
         db.close()
 
+def get_current_user(request: Request, db: Session = Depends(get_db)) -> dict:
+    """
+    Resolve acting user and role:
+    1. Honors X-User-Role only when ALLOW_TEST_ROLE_HEADER=true (for automated tests)
+    2. Authorization: Bearer header takes precedence over ss_token cookie
+    3. Unauthenticated requests raise 401
+    """
+    allow_test_role = os.getenv("ALLOW_TEST_ROLE_HEADER", "false").strip().lower() in ("true", "1", "yes")
+    if allow_test_role:
+        test_role = request.headers.get("X-User-Role")
+        via_ai = request.headers.get("X-Via-AI") == "true" or request.query_params.get("via_ai") == "true"
+        suffix = " via AI" if via_ai else ""
+        if test_role in ("admin", "manager", "storekeeper"):
+            return {"username": f"{test_role}{suffix}", "role": test_role, "full_name": test_role.capitalize()}
+        elif request.method == "GET":
+            return {"username": f"admin{suffix}", "role": "admin", "full_name": "Test Admin"}
 
-def _log_event(db: Session, action: str, target_id: str = None, details: str = None, user: str = "System Administrator"):
-    """Internal helper for audit logging. All params except db and action are optional."""
+    auth_header = request.headers.get("Authorization", "").strip()
+    token = ""
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+    elif auth_header:
+        token = auth_header
+    if not token:
+        token = request.cookies.get("ss_token", "").strip()
+
+    if token and token in AUTHENTICATED_SESSIONS:
+        _purge_expired_sessions()
+        session_data = AUTHENTICATED_SESSIONS.get(token)
+        if session_data:
+            user_dict = dict(session_data)
+            via_ai = request.headers.get("X-Via-AI") == "true" or request.query_params.get("via_ai") == "true"
+            if via_ai:
+                base = user_dict["username"].replace(" via AI", "")
+                user_dict["username"] = f"{base} via AI"
+            return user_dict
+
+    raise HTTPException(status_code=401, detail="Authentication required. Please sign in.")
+
+def require_roles(allowed_roles: list[str]):
+    def role_checker(current_user: dict = Depends(get_current_user)):
+        user_role = current_user.get("role", "storekeeper")
+        if user_role not in allowed_roles:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Operation forbidden for role '{user_role}'. Allowed roles: {allowed_roles}"
+            )
+        return current_user
+    return role_checker
+
+
+# ─── Pydantic Request Models ─────────────────────────────────────────
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class ItemCreateRequest(BaseModel):
+    sku: str
+    name: str
+    category: str
+    unit: Optional[str] = "pcs"
+    compatible_with: Optional[str] = None
+    location: Optional[str] = "R1-B01"
+    quantity: int = 0
+    reorder_level: int = 10
+    reorder_qty: int = 50
+    unit_cost: float = 0.0
+    selling_price: float = 0.0
+    supplier_id: Optional[str] = None
+
+class ItemUpdateRequest(BaseModel):
+    sku: Optional[str] = None
+    name: Optional[str] = None
+    category: Optional[str] = None
+    unit: Optional[str] = None
+    compatible_with: Optional[str] = None
+    location: Optional[str] = None
+    quantity: Optional[int] = None
+    reorder_level: Optional[int] = None
+    reorder_qty: Optional[int] = None
+    unit_cost: Optional[float] = None
+    selling_price: Optional[float] = None
+    supplier_id: Optional[str] = None
+
+class StockInRequest(BaseModel):
+    item_id: Optional[int] = None
+    sku: Optional[str] = None
+    quantity: int
+    supplier: Optional[str] = "Authorized OEM"
+    reference: Optional[str] = "Goods Receipt"
+    client_id: Optional[str] = None # Offline queue idempotency UUID
+
+class StockOutRequest(BaseModel):
+    item_id: Optional[int] = None
+    sku: Optional[str] = None
+    quantity: int
+    customer: Optional[str] = "Welding Line"
+    invoice_no: Optional[str] = "DISP-ISSUE"
+    client_id: Optional[str] = None # Offline queue idempotency UUID
+
+class StockAdjustmentRequest(BaseModel):
+    item_id: Optional[int] = None
+    sku: Optional[str] = None
+    quantity_change: int
+    reason: str
+    reference: Optional[str] = "Manual Adjustment"
+    destination: Optional[str] = "Shop Floor"
+    client_id: Optional[str] = None # Offline queue idempotency UUID
+
+class StockMovementCreate(BaseModel):
+    sku: str
+    item_name: Optional[str] = ""
+    movement_type: Optional[str] = "OUTWARD"
+    type: Optional[str] = None
+    quantity: int
+    reference: Optional[str] = ""
+    destination_or_source: Optional[str] = "Central Store"
+    party: Optional[str] = None
+    operator: Optional[str] = "storekeeper"
+    performed_by: Optional[str] = None
+    notes: Optional[str] = ""
+    client_id: Optional[str] = None # Offline queue idempotency UUID
+
+class CycleCountCreateRequest(BaseModel):
+    type: str = "CATEGORY" # CATEGORY | BIN | ALL
+    target_name: Optional[str] = "MIG Welding"
+    notes: Optional[str] = None
+
+class CycleCountItemEntry(BaseModel):
+    item_id: int
+    counted_qty: int
+    discrepancy_reason: Optional[str] = None
+
+class CycleCountUpdateRequest(BaseModel):
+    counts: List[CycleCountItemEntry]
+
+class CycleCountActionRequest(BaseModel):
+    notes: Optional[str] = None
+    reason: Optional[str] = None
+
+class POLineItemCreate(BaseModel):
+    item_id: Optional[int] = None
+    sku: Optional[str] = None
+    qty: int
+    unit_cost: Optional[float] = None
+
+class CreatePORequest(BaseModel):
+    vendor_id: Optional[str] = None
+    supplier_id: Optional[str] = None
+    po_number: Optional[str] = None
+    item: Optional[str] = "Welding Equipment Spares"
+    quantity: Optional[int] = 1
+    amount: Optional[float] = 0.0
+    department: Optional[str] = "Central Store"
+    items: Optional[list] = None
+
+class POReceiveItem(BaseModel):
+    item_id: int
+    qty_received: int
+
+class POReceiveRequest(BaseModel):
+    items: Optional[list[POReceiveItem]] = None
+
+class ScanDocConfirmRequest(BaseModel):
+    reviewed_lines: list[dict]
+    fields_corrected: int = 0
+    po_id: Optional[int] = None
+
+class CreateInventoryItemRequest(BaseModel):
+    id: Optional[int] = None
+    name: str
+    sku: str
+    category: str
+    unit: Optional[str] = "pcs"
+    compatible_with: Optional[str] = None
+    location: Optional[str] = "R1-B01"
+    quantity: int = 0
+    reorder_level: int = 10
+    reorder_qty: int = 50
+    unit_cost: float = 0.0
+    selling_price: float = 0.0
+    unit_price: Optional[float] = None
+    supplier_id: Optional[str] = None
+    hsn_code: Optional[str] = "8466"
+    gst_rate: Optional[float] = 18.0
+
+class CustomerCreateRequest(BaseModel):
+    name: str
+    gstin: Optional[str] = None
+    state: str = "Haryana"
+    city: str
+    contact_person: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    price_tier: Optional[str] = "Standard"
+    credit_limit: Optional[float] = 100000.0
+    credit_days: Optional[int] = 30
+    whatsapp_opt_out: Optional[bool] = False
+
+class CustomerUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    gstin: Optional[str] = None
+    state: Optional[str] = None
+    city: Optional[str] = None
+    contact_person: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    price_tier: Optional[str] = None
+    credit_limit: Optional[float] = None
+    credit_days: Optional[int] = None
+    is_active: Optional[bool] = None
+    whatsapp_opt_out: Optional[bool] = None
+
+class WhatsAppPreviewRequest(BaseModel):
+    template_type: str = "opportunity" # "opportunity" | "po"
+    ref_id: str
+    lang: Optional[str] = "en" # "en" | "hi"
+    customer_id: Optional[int] = None
+    supplier_id: Optional[str] = None
+    custom_text: Optional[str] = None
+
+class WhatsAppSendRequest(BaseModel):
+    template_type: str = "opportunity" # "opportunity" | "po"
+    ref_id: str
+    lang: Optional[str] = "en"
+    phone: str
+    message: str
+    customer_id: Optional[int] = None
+    supplier_id: Optional[str] = None
+
+class CustomerOptOutRequest(BaseModel):
+    opt_out: bool
+
+class SalesOrderItemInput(BaseModel):
+    item_id: int
+    qty: int
+    unit_price: Optional[float] = None
+    discount_pct: Optional[float] = 0.0
+
+class SalesOrderCreateRequest(BaseModel):
+    customer_id: int
+    items: list[SalesOrderItemInput]
+    status: Optional[str] = None
+    is_quote: Optional[bool] = None
+    valid_until: Optional[str] = None
+    notes: Optional[str] = None
+
+class SalesOrderConfirmRequest(BaseModel):
+    override_reason: Optional[str] = None
+
+class SalesOrderDispatchRequest(BaseModel):
+    items: Optional[list[dict]] = None
+
+class PaymentCreateRequest(BaseModel):
+    amount: float
+    mode: Optional[str] = "NEFT/RTGS"
+    reference: Optional[str] = None
+    date: Optional[str] = None
+
+class SupplierCreateRequest(BaseModel):
+    id: Optional[str] = None
+    name: str
+    contact_person: Optional[str] = "Sales Manager"
+    phone: Optional[str] = "+91 124 400 0000"
+    city: Optional[str] = "Delhi-NCR"
+    lead_time_days: Optional[int] = 3
+    rating: Optional[float] = 4.5
+    category: Optional[str] = "Welding Supplies"
+    contact_email: Optional[str] = "sales@supplier.com"
+
+class SupplierUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    contact_person: Optional[str] = None
+    phone: Optional[str] = None
+    city: Optional[str] = None
+    lead_time_days: Optional[int] = None
+    rating: Optional[float] = None
+    category: Optional[str] = None
+    contact_email: Optional[str] = None
+
+class AIChatRequest(BaseModel):
+    message: str
+    conversation_history: Optional[list] = None
+    stream: bool = False
+    session_id: Optional[str] = None
+
+class WhatIfRequest(BaseModel):
+    item_id: Optional[int] = None
+    sku: Optional[str] = None
+    lead_time_delta_days: int = 0
+    demand_increase_pct: float = 0.0
+
+class ServiceLevelSettingRequest(BaseModel):
+    service_level: str = "95%"
+    safety_stock_method: Optional[str] = "service_level"
+
+
+# ─── WebSocket Connection Manager ────────────────────────────────────
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        logger.info(f"[WS] Client connected. Active: {len(self.active_connections)}")
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+        logger.info(f"[WS] Client disconnected. Active: {len(self.active_connections)}")
+
+    async def broadcast(self, message: dict):
+        dead_sockets = []
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(message)
+            except Exception:
+                dead_sockets.append(connection)
+        for s in dead_sockets:
+            self.disconnect(s)
+
+manager = ConnectionManager()
+simulator_running = os.getenv("SIMULATOR_ENABLED", "false").lower() in ("true", "1", "yes")
+
+
+# ─── Background Welding Spares Simulator ─────────────────────────────
+async def simulate_stock_events():
+    """Simulate realistic factory stock dispatches and receipts in Gurugram industrial cluster."""
+    global simulator_running
+    await asyncio.sleep(4)  # Initial wait
+
+    welding_lines = [
+        "Robotic Welding Cell #1 (Auto Exhaust)",
+        "Robotic Welding Cell #2 (Chassis Fab)",
+        "TIG Piping Station B",
+        "MIG Heavy Fab Bay",
+        "Structural Assembly Line 3",
+        "Toolroom Maintenance",
+    ]
+
+    while True:
+        try:
+            if not simulator_running:
+                await asyncio.sleep(3)
+                continue
+
+            await asyncio.sleep(random.randint(6, 12))
+            db = SessionLocal()
+            try:
+                items = db.query(Inventory).all()
+                if not items:
+                    continue
+
+                item = random.choice(items)
+                event_type = random.choices(["DISPATCH", "RECEIPT", "CYCLE_COUNT"], weights=[0.65, 0.25, 0.10])[0]
+
+                now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+                now_iso = datetime.datetime.now().isoformat()
+
+                if event_type == "DISPATCH" and item.quantity > 5:
+                    disp_qty = random.randint(1, min(10, item.quantity))
+                    item.quantity -= disp_qty
+                    item.last_updated = now_iso
+                    line = random.choice(welding_lines)
+
+                    movement = StockMovement(
+                        item_id=item.id,
+                        type="OUT",
+                        quantity=disp_qty,
+                        reference=f"ISSUE-{random.randint(1000, 9999)}",
+                        party=line,
+                        performed_by="storekeeper",
+                        timestamp=now_str,
+                        balance_after=item.quantity
+                    )
+                    db.add(movement)
+                    db.commit()
+
+                    await manager.broadcast({
+                        "type": "new_stock_movement",
+                        "data": {
+                            "sku": item.sku,
+                            "item_name": item.name,
+                            "type": "OUTWARD",
+                            "quantity": disp_qty,
+                            "destination": line,
+                            "remaining": item.quantity,
+                            "timestamp": now_str
+                        }
+                    })
+
+                    # Requirement C: Event trigger in simulator
+                    await trigger_replenishment_events([item.id], db, user="simulator")
+
+                elif event_type == "RECEIPT":
+                    rcv_qty = random.choice([20, 50, 100, 200])
+                    item.quantity += rcv_qty
+                    item.last_updated = now_iso
+
+                    movement = StockMovement(
+                        item_id=item.id,
+                        type="IN",
+                        quantity=rcv_qty,
+                        reference=f"PO-2026-{random.randint(110, 199)}",
+                        party="Supplier Delivery Dock",
+                        performed_by="storekeeper",
+                        timestamp=now_str,
+                        balance_after=item.quantity
+                    )
+                    db.add(movement)
+                    db.commit()
+
+                    await manager.broadcast({
+                        "type": "new_stock_movement",
+                        "data": {
+                            "sku": item.sku,
+                            "item_name": item.name,
+                            "type": "INWARD",
+                            "quantity": rcv_qty,
+                            "destination": "Central Store",
+                            "remaining": item.quantity,
+                            "timestamp": now_str
+                        }
+                    })
+
+                # Broadcast live stats update
+                stats_payload = _compute_stats(db)
+                await manager.broadcast({
+                    "type": "stats_update",
+                    "data": stats_payload
+                })
+
+            finally:
+                db.close()
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"[Simulator] Error: {e}")
+            await asyncio.sleep(5)
+
+
+# ─── Lifespan Context ────────────────────────────────────────────────
+
+# ─── Automation Engine & Scheduler ──────────────────────────────────
+scheduler = AsyncIOScheduler()
+# _daily_overdue_notified now stored in AppSetting table
+
+class AutomationSettingsUpdate(BaseModel):
+    auto_reorder_enabled: Optional[bool] = None
+    scan_interval_minutes: Optional[int] = None
+    smart_qty_enabled: Optional[bool] = None
+    safety_days: Optional[int] = None
+    auto_approve_enabled: Optional[bool] = None
+    auto_approve_limit: Optional[float] = None
+    auto_approve_min_supplier_rating: Optional[float] = None
+    overdue_alerts_enabled: Optional[bool] = None
+    email_on_approval: Optional[bool] = None
+    digest_time: Optional[str] = None
+
+def get_setting_val(db: Session, key: str, default: str = "") -> str:
+    s = db.query(AppSetting).filter(AppSetting.key == key).first()
+    return s.value if s else default
+
+def get_automation_settings_dict(db: Session) -> dict:
+    return {
+        "auto_reorder_enabled": get_setting_val(db, "auto_reorder_enabled", "true").lower() in ("true", "1", "yes"),
+        "scan_interval_minutes": int(get_setting_val(db, "scan_interval_minutes", "5") or "5"),
+        "smart_qty_enabled": get_setting_val(db, "smart_qty_enabled", "true").lower() in ("true", "1", "yes"),
+        "safety_days": int(get_setting_val(db, "safety_days", "14") or "14"),
+        "auto_approve_enabled": get_setting_val(db, "auto_approve_enabled", "false").lower() in ("true", "1", "yes"),
+        "auto_approve_limit": float(get_setting_val(db, "auto_approve_limit", "25000") or "25000"),
+        "auto_approve_min_supplier_rating": float(get_setting_val(db, "auto_approve_min_supplier_rating", "4.0") or "4.0"),
+        "overdue_alerts_enabled": get_setting_val(db, "overdue_alerts_enabled", "true").lower() in ("true", "1", "yes"),
+        "email_on_approval": get_setting_val(db, "email_on_approval", "true").lower() in ("true", "1", "yes"),
+        "digest_time": get_setting_val(db, "digest_time", "08:00")
+    }
+
+async def trigger_replenishment_events(item_ids, db: Session, user: str = "system"):
+    """Helper to run ensure_replenishment and broadcast resulting WebSocket alerts."""
     try:
-        new_log = AuditLog(
-            timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            action=action,
-            target_id=str(target_id) if target_id is not None else None,
-            details=str(details) if details is not None else None,
-            user=user
-        )
-        db.add(new_log)
-        db.commit()
+        triggered = ensure_replenishment(item_ids, db, user=user)
+        for t in triggered:
+            alert = t.get("alert")
+            if alert:
+                await manager.broadcast({"type": "low_stock", "data": alert})
+                await manager.broadcast({"type": "reorder_alert", "data": alert})
+        if triggered:
+            stats = _compute_stats(db)
+            await manager.broadcast({"type": "stats_update", "data": stats})
+        return triggered
     except Exception as e:
-        logger.error(f"[AuditLog] Failed to write event '{action}': {e}")
+        logger.error(f"[trigger_replenishment_events] Error: {e}")
+        return []
+
+async def run_automation_cycle(trigger: str = "scheduled") -> dict:
+    """
+    Scheduled & on-demand automation cycle:
+    1. Reads active settings from AppSetting.
+    2. Computes status for all active items.
+    3. Triggers reorder for LOW/CRITICAL/OUT not on open DRAFT/APPROVED/PARTIALLY_RECEIVED POs.
+    4. Evaluates auto-approval rules.
+    5. Detects and daily-dedupes overdue PO alerts.
+    6. Records AutomationRun and broadcasts.
+    """
+    db = SessionLocal()
+    try:
+        settings = get_automation_settings_dict(db)
+        items = db.query(Inventory).filter(Inventory.is_active == True).all()
+        scanned = len(items)
+        drafted = 0
+        auto_approved = 0
+        skipped_open_po = 0
+        pos_touched = set()
+
+        for item in items:
+            status = compute_item_status(item, db)
+            if status in ("LOW", "CRITICAL", "OUT"):
+                open_lines = db.query(POItem).join(Procurement).filter(
+                    POItem.item_id == item.id,
+                    Procurement.status.in_(["DRAFT", "APPROVED", "PARTIALLY_RECEIVED"])
+                ).all()
+                has_open_po = False
+                for line in open_lines:
+                    po_status = line.purchase_order.status
+                    if po_status in ("DRAFT", "APPROVED"):
+                        has_open_po = True
+                        break
+                    elif po_status == "PARTIALLY_RECEIVED":
+                        outstanding = line.qty - (getattr(line, "received_qty", 0) or 0)
+                        if outstanding > 0:
+                            has_open_po = True
+                            break
+
+                if has_open_po:
+                    skipped_open_po += 1
+                    continue
+
+                if settings["auto_reorder_enabled"]:
+                    triggered, po, alert = check_and_trigger_auto_reorder(item, db, user="automation")
+                    if triggered and po:
+                        drafted += 1
+                        pos_touched.add(po)
+                        if alert:
+                            await manager.broadcast({"type": "low_stock", "data": alert})
+                            await manager.broadcast({"type": "reorder_alert", "data": alert})
+
+        for po in pos_touched:
+            approved = check_and_apply_auto_approval(po, db, user="automation")
+            if approved:
+                auto_approved += 1
+                await manager.broadcast({
+                    "type": "po_auto_approved",
+                    "data": {
+                        "id": po.id,
+                        "po_number": po.po_number,
+                        "total_value": po.total_value,
+                        "supplier_name": po.supplier.name if po.supplier else ""
+                    }
+                })
+                await manager.broadcast({
+                    "type": "po_status_change",
+                    "data": {"id": po.id, "po_number": po.po_number, "status": "APPROVED"}
+                })
+            else:
+                await manager.broadcast({
+                    "type": "po_awaiting_approval",
+                    "data": {
+                        "id": po.id,
+                        "po_number": po.po_number,
+                        "total_value": po.total_value,
+                        "supplier_name": po.supplier.name if po.supplier else ""
+                    }
+                })
+
+        # Overdue PO checks
+        today_str = datetime.date.today().isoformat()
+        overdue_pos = db.query(Procurement).filter(
+            Procurement.status.in_(["APPROVED", "PARTIALLY_RECEIVED"]),
+            Procurement.expected_date != None,
+            Procurement.expected_date < today_str
+        ).all()
+        overdue_count = len(overdue_pos)
+
+        if settings["overdue_alerts_enabled"]:
+            notified_setting_key = f"overdue_notified_{today_str}"
+            notified_row = db.query(AppSetting).filter(AppSetting.key == notified_setting_key).first()
+            notified_set = set()
+            if notified_row and notified_row.value:
+                try:
+                    notified_set = set(json.loads(notified_row.value))
+                except Exception:
+                    notified_set = set()
+
+            newly_notified = False
+            for opo in overdue_pos:
+                if opo.po_number not in notified_set:
+                    notified_set.add(opo.po_number)
+                    newly_notified = True
+                    try:
+                        exp_d = datetime.date.fromisoformat(str(opo.expected_date)[:10])
+                        d_late = (datetime.date.today() - exp_d).days
+                    except Exception:
+                        d_late = 1
+                    await manager.broadcast({
+                        "type": "po_overdue_alert",
+                        "data": {
+                            "po_number": opo.po_number,
+                            "supplier_name": opo.supplier.name if opo.supplier else "Supplier",
+                            "expected_date": opo.expected_date,
+                            "days_late": d_late
+                        }
+                    })
+
+            if newly_notified:
+                val_json = json.dumps(list(notified_set))
+                if notified_row:
+                    notified_row.value = val_json
+                    notified_row.updated_at = datetime.datetime.now().isoformat()
+                else:
+                    db.add(AppSetting(
+                        key=notified_setting_key,
+                        value=val_json,
+                        updated_by="automation",
+                        updated_at=datetime.datetime.now().isoformat()
+                    ))
+                db.commit()
+
+        summary = f"Scanned {scanned} items. Drafted {drafted} items, {auto_approved} auto-approved, {skipped_open_po} skipped (on open PO). {overdue_count} overdue POs."
+        now_dt_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        run_rec = AutomationRun(
+            started_at=now_dt_str,
+            trigger=trigger,
+            scanned=scanned,
+            drafted=drafted,
+            auto_approved=auto_approved,
+            overdue=overdue_count,
+            summary=summary
+        )
+        db.add(run_rec)
+        db.commit()
+
+        run_data = {
+            "id": run_rec.id,
+            "started_at": run_rec.started_at,
+            "trigger": trigger,
+            "scanned": scanned,
+            "drafted": drafted,
+            "auto_approved": auto_approved,
+            "skipped_open_po": skipped_open_po,
+            "overdue": overdue_count,
+            "summary": summary
+        }
+
+        await manager.broadcast({"type": "automation_run", "data": run_data})
+        if drafted > 0:
+            stats = _compute_stats(db)
+            await manager.broadcast({"type": "stats_update", "data": stats})
+
+        return run_data
+
+    except Exception as e:
+        logger.error(f"[Automation Engine] Cycle error: {e}", exc_info=True)
+        return {
+            "error": str(e),
+            "scanned": 0,
+            "drafted": 0,
+            "auto_approved": 0,
+            "skipped_open_po": 0,
+            "overdue": 0,
+            "summary": f"Automation cycle encountered error: {e}"
+        }
+    finally:
+        db.close()
+
+async def run_daily_digest_job():
+    """Scheduled task generating daily operational digest."""
+    db = SessionLocal()
+    try:
+        data = generate_daily_digest(db, triggered_by="scheduler")
+        await manager.broadcast({"type": "daily_digest_generated", "data": {"date": data.get("date")}})
+        logger.info(f"[Daily Digest] Generated daily operations digest for {data.get('date')}.")
+    except Exception as e:
+        logger.error(f"[Daily Digest] Scheduled run error: {e}")
+    finally:
+        db.close()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    logger.info("Anishka Inventory Management System (Anishka Industries, Gurugram) online.")
+    sim_task = asyncio.create_task(simulate_stock_events())
+
+    # Start APScheduler for automation cycle
+    db_init = SessionLocal()
+    try:
+        s_int = db_init.query(AppSetting).filter(AppSetting.key == "scan_interval_minutes").first()
+        scan_mins = int(s_int.value) if s_int and s_int.value and s_int.value.isdigit() else 5
+    except Exception:
+        scan_mins = 5
+    finally:
+        db_init.close()
+
+    try:
+        scheduler.add_job(
+            run_automation_cycle,
+            "interval",
+            minutes=max(1, scan_mins),
+            id="automation_cycle",
+            replace_existing=True
+        )
+
+        d_val = get_setting_val(db_init, "digest_time", "08:00")
+        try:
+            parts = d_val.split(":")
+            dh, dm = int(parts[0]), int(parts[1])
+        except Exception:
+            dh, dm = 8, 0
+
+        scheduler.add_job(
+            create_backup,
+            "cron",
+            hour=2,
+            minute=0,
+            id="nightly_backup_job",
+            kwargs={"tag": "nightly"},
+            replace_existing=True
+        )
+
+        scheduler.add_job(
+            run_daily_digest_job,
+            "cron",
+            hour=dh,
+            minute=dm,
+            id="daily_digest_job",
+            replace_existing=True
+        )
+        if not scheduler.running:
+            scheduler.start()
+        logger.info(f"[Automation] Scheduler started with {scan_mins}m interval.")
+    except Exception as sched_err:
+        logger.error(f"[Automation] Scheduler failed to start: {sched_err}")
+
+    yield
+
+    global simulator_running
+    simulator_running = False
+    sim_task.cancel()
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
+
+
+# ─── FastAPI App Initialization ──────────────────────────────────────
+app = FastAPI(
+    title="Anishka Inventory · Industrial Spares Management",
+    description="Inventory and procurement management system for Anishka Industries, Gurugram",
+    version="7.0.0",
+    lifespan=lifespan
+)
+
+def _rate_limit_key(request: Request) -> str:
+    auth_header = request.headers.get("Authorization", "").strip()
+    token = ""
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+    elif auth_header:
+        token = auth_header
+    if not token:
+        token = request.cookies.get("ss_token", "").strip()
+    if token:
+        return f"tok:{token}"
+    test_role = request.headers.get("X-User-Role")
+    if test_role:
+        return f"role:{test_role}"
+    return get_remote_address(request)
+
+limiter = Limiter(key_func=_rate_limit_key)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+@app.middleware("http")
+async def enforce_api_authentication(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/api/") and path not in ("/api/login", "/api/health"):
+        allow_test_role = os.getenv("ALLOW_TEST_ROLE_HEADER", "false").strip().lower() in ("true", "1", "yes")
+        user = None
+        if allow_test_role:
+            test_role = request.headers.get("X-User-Role")
+            if test_role in ("admin", "manager", "storekeeper"):
+                user = {"username": test_role, "role": test_role, "full_name": test_role.capitalize()}
+            elif request.method == "GET":
+                user = {"username": "admin", "role": "admin", "full_name": "Test Admin"}
+        if not user:
+            auth_header = request.headers.get("Authorization", "").strip()
+            token = ""
+            if auth_header.startswith("Bearer "):
+                token = auth_header[7:].strip()
+            elif auth_header:
+                token = auth_header
+            if not token:
+                token = request.cookies.get("ss_token", "").strip()
+            if token and token in AUTHENTICATED_SESSIONS:
+                _purge_expired_sessions()
+                user = AUTHENTICATED_SESSIONS.get(token)
+        if not user:
+            return JSONResponse(status_code=401, content={"detail": "Authentication required. Please sign in."})
+    return await call_next(request)
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        for h_name, h_val in SECURITY_HEADERS.items():
+            response.headers[h_name] = h_val
+        return response
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["Content-Disposition", "X-Request-ID", "X-Process-Time-Ms"]
+)
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(StructuredLoggingMiddleware)
+app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
+
+
+# ─── Root & Authentication Endpoints ─────────────────────────────────
 
 @app.get("/")
-def serve_frontend(request: Request):
-    token = request.cookies.get("ss_token")
-    if not token or token not in AUTHENTICATED_SESSIONS:
-        return RedirectResponse(url="/login")
-    return FileResponse(os.path.join(os.path.dirname(__file__), "static", "index.html"))
-
+async def root_redirect(request: Request):
+    """Serve the single-page application dashboard."""
+    index_file = os.path.join(os.path.dirname(__file__), "static", "index.html")
+    return FileResponse(index_file)
 
 @app.get("/login")
-def serve_login():
-    return FileResponse(os.path.join(os.path.dirname(__file__), "static", "login.html"))
+async def login_page():
+    login_file = os.path.join(os.path.dirname(__file__), "static", "login.html")
+    return FileResponse(login_file)
 
+@app.get("/manifest.json")
+async def get_manifest():
+    """Serve PWA Web App Manifest."""
+    manifest_file = os.path.join(os.path.dirname(__file__), "static", "manifest.json")
+    return FileResponse(manifest_file, media_type="application/manifest+json")
 
-# ─── Login Rate Limiter ─────────────────────────────────
-# Tracks failed login attempts per IP. After 5 failures within 5 minutes,
-# subsequent attempts are rejected with 429 for 5 minutes.
-_login_failures: dict = {}   # {ip: [timestamp, ...]}
-_LOGIN_MAX_ATTEMPTS = 5
-_LOGIN_WINDOW_SECONDS = 300  # 5-minute window
+@app.get("/sw.js")
+async def get_service_worker():
+    """Serve PWA Service Worker for offline shell caching and sync."""
+    sw_file = os.path.join(os.path.dirname(__file__), "static", "sw.js")
+    return FileResponse(sw_file, media_type="application/javascript")
 
-def _check_login_rate_limit(ip: str):
-    """Raise 429 if the IP has exceeded the failed-login threshold."""
-    now = datetime.datetime.now().timestamp()
-    window_start = now - _LOGIN_WINDOW_SECONDS
-    attempts = [t for t in _login_failures.get(ip, []) if t > window_start]
-    if len(attempts) >= _LOGIN_MAX_ATTEMPTS:
-        raise HTTPException(status_code=429, detail="Too many failed login attempts. Try again in 5 minutes.")
-    _login_failures[ip] = attempts
+@app.get("/api/health")
+async def api_health(db: Session = Depends(get_db)):
+    """Enterprise health check endpoint reporting DB connectivity, scheduler, and security status."""
+    t_start = time.perf_counter()
+    db_ok = False
+    dialect_name = "unknown"
+    try:
+        db.connection().exec_driver_sql("SELECT 1")
+        db_ok = True
+        dialect_name = "sqlite" if "sqlite" in DATABASE_URL.lower() else "postgresql"
+    except Exception as e:
+        dialect_name = str(e)
+    db_latency = round((time.perf_counter() - t_start) * 1000, 2)
 
-def _record_login_failure(ip: str):
-    now = datetime.datetime.now().timestamp()
-    _login_failures.setdefault(ip, []).append(now)
+    scheduler_jobs = []
+    sched_running = False
+    try:
+        if scheduler.running:
+            sched_running = True
+            for job in scheduler.get_jobs():
+                scheduler_jobs.append({
+                    "id": job.id,
+                    "name": job.name,
+                    "next_run": str(job.next_run_time) if job.next_run_time else None
+                })
+    except Exception:
+        pass
 
+    return {
+        "status": "healthy" if db_ok else "degraded",
+        "facility": "Anishka Industries, Gurugram",
+        "version": "2.5.0-pilot",
+        "timestamp": datetime.datetime.now().isoformat(),
+        "database": {
+            "status": "connected" if db_ok else "disconnected",
+            "dialect": dialect_name,
+            "latency_ms": db_latency
+        },
+        "scheduler": {
+            "running": sched_running,
+            "jobs_count": len(scheduler_jobs),
+            "jobs": [j["id"] for j in scheduler_jobs]
+        },
+        "security": {
+            "password_hashing": "argon2id/bcrypt",
+            "rate_limiting": "active",
+            "secure_cookies": os.getenv("SECURE_COOKIES", "false").lower() in ("true", "1")
+        }
+    }
 
 @app.post("/api/login")
-async def api_login(body: LoginRequest, request: Request):
-    client_ip = request.client.host if request.client else "unknown"
-    _check_login_rate_limit(client_ip)
-    logger.info(f"Login attempt: user={body.username} from {client_ip}")
-    if DEMO_CREDENTIALS.get(body.username) == body.password:
-        # Clear failure record on successful login
-        _login_failures.pop(client_ip, None)
-        # Purge any stale sessions to keep memory bounded
-        _purge_expired_sessions()
-        token = secrets.token_hex(32)
-        AUTHENTICATED_SESSIONS[token] = datetime.datetime.now()   # store creation time
-        response = JSONResponse(content={"status": "success", "token": token})
-        # secure=True ensures the cookie is only sent over HTTPS.
-        # In local dev over HTTP this is intentionally set to False to allow the
-        # browser to transmit the cookie; flip to True behind a TLS terminator.
-        is_secure = request.url.scheme == "https"
+async def api_login(req: LoginRequest, response: Response, db: Session = Depends(get_db)):
+    # 1. Brute-force rate limiting & lockout check
+    is_locked, remaining_secs = check_rate_limit(req.username)
+    if is_locked:
+        mins = max(1, remaining_secs // 60)
+        raise HTTPException(
+            status_code=429,
+            detail=f"Account locked due to consecutive failed login attempts. Try again in {mins} minute(s)."
+        )
+
+    valid_passwords = {
+        "admin": "admin@2026",
+        "manager": "manager@2026",
+        "storekeeper": "storekeeper@2026"
+    }
+
+    user = db.query(UserRole).filter(UserRole.username == req.username).first()
+    authenticated = False
+    role = "storekeeper"
+    full_name = req.username
+    must_change = False
+
+    if user:
+        if hasattr(user, "is_active") and user.is_active is False:
+            raise HTTPException(status_code=403, detail="Account is deactivated. Contact system administrator.")
+
+        if verify_password(req.password, user.password):
+            authenticated = True
+            role = user.role
+            full_name = user.full_name or req.username
+
+            # Transparently upgrade legacy plaintext password to Argon2/bcrypt hash
+            if needs_rehash(user.password):
+                user.password = hash_password(req.password)
+
+            # Check if password must be changed
+            must_change = bool(getattr(user, "must_change_password", False) or is_default_password(req.password))
+            user.last_login = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            db.commit()
+
+    elif req.username in valid_passwords and req.password == valid_passwords[req.username]:
+        # Fallback for seeded accounts if user not yet created in user_roles
+        authenticated = True
+        role = req.username
+        must_change = True
+
+    if authenticated:
+        record_successful_login(req.username)
+        token = secrets.token_hex(24)
+        AUTHENTICATED_SESSIONS[token] = {
+            "username": req.username,
+            "role": role,
+            "full_name": full_name,
+            "expires": datetime.datetime.now() + datetime.timedelta(hours=SESSION_TTL_HOURS)
+        }
+
+        cookie_opts = get_cookie_params(max_age_seconds=SESSION_TTL_HOURS * 3600)
         response.set_cookie(
             key="ss_token",
             value=token,
-            httponly=True,
-            samesite="strict",
-            secure=is_secure,
-            max_age=SESSION_TTL_HOURS * 3600,
+            **cookie_opts
         )
-        return response
-    _record_login_failure(client_ip)
-    raise HTTPException(status_code=401, detail="Invalid credentials")
 
-
-@app.post("/api/logout")
-async def api_logout(request: Request):
-    token = request.cookies.get("ss_token")
-    AUTHENTICATED_SESSIONS.pop(token, None)   # safe even if token is None or already removed
-    response = RedirectResponse(url="/login")
-    response.delete_cookie("ss_token")
-    return response
-
-
-# ─── WebSocket endpoint ─────────────────────────────────
-@app.websocket("/ws")
-async def websocket_endpoint(ws: WebSocket):
-    # Authenticate via cookie before accepting the connection
-    token = ws.cookies.get("ss_token")
-    if not token or token not in AUTHENTICATED_SESSIONS:
-        await ws.close(code=1008)  # Policy violation
-        return
-    await manager.connect(ws)
-    try:
-        # Send initial data burst on connect
-        db = SessionLocal()
-        try:
-            stats = _get_stats_dict(db)
-            await ws.send_json({"type": "stats_update", "data": stats})
-            recs = get_recommendations(db)
-            if recs:
-                await ws.send_json({"type": "recommendations", "data": recs[:5]})
-            await ws.send_json({
-                "type": "connection_info",
-                "data": {"clients": manager.client_count, "simulator": simulator_running}
-            })
-        finally:
-            db.close()
-
-        while True:
-            data = await ws.receive_text()
-            msg = json.loads(data)
-            if msg.get("type") == "ping":
-                await ws.send_json({"type": "pong", "data": {"clients": manager.client_count}})
-    except WebSocketDisconnect:
-        manager.disconnect(ws)
-    except Exception:
-        manager.disconnect(ws)
-
-
-# ─── STATS ──────────────────────────────────────────────
-def _get_stats_dict(db: Session) -> dict:
-    total_txn = db.query(Transaction).count()
-    total_shadows = db.query(ShadowPurchase).count()
-    pending = db.query(ShadowPurchase).filter(ShadowPurchase.status == "Pending").count()
-    resolved = db.query(ShadowPurchase).filter(ShadowPurchase.status == "Resolved").count()
-
-    shadow_spend = 0
-    for s in db.query(ShadowPurchase).all():
-        t = db.query(Transaction).filter(Transaction.id == s.transaction_id).first()
-        if t:
-            shadow_spend += t.amount
-    total_spend = sum(t.amount for t in db.query(Transaction).all())
-
-    vendors = db.query(Vendor).all()
-    high_risk = sum(1 for v in vendors if v.risk_level == "High")
-
-    # Feedback stats
-    total_feedback = db.query(UserFeedback).count()
-
-    shadow_rate = round(total_shadows / total_txn, 4) if total_txn > 0 else 0.0
-    risk_level = "High" if shadow_rate > 0.15 else "Medium"
-    if total_shadows == 0: risk_level = "Low"
-
-    low_stock = db.query(Inventory).filter(Inventory.quantity <= Inventory.reorder_level).count()
-
-    return {
-        "total_transactions": total_txn,
-        "total_shadows": total_shadows,
-        "pending_shadows": pending,
-        "resolved_shadows": resolved,
-        "total_procurement": db.query(Procurement).count(),
-        "total_inventory_items": db.query(Inventory).count(),
-        "inventory_health": low_stock, # Mapped to header card
-        "total_exposure": round(shadow_spend, 2),
-        "exposure": round(shadow_spend, 2),
-        "shadow_rate": shadow_rate,
-        "risk_level": risk_level,
-        "detection_quality": _compute_detection_quality(db),
-        "avg_confidence": round(sum(s.confidence_score or 0 for s in db.query(ShadowPurchase).all()) / total_shadows, 2) if total_shadows > 0 else 0.92,
-        "total_spend": round(total_spend, 2),
-        "high_risk_vendors": high_risk,
-        "connected_clients": manager.client_count,
-        "pending":          pending,
-        "feedback_count":   db.query(UserFeedback).count(),
-        "model_version":    getattr(shadow_ai, 'model_version', 'IsolationForest-v3 (10-feature)'),
-        "last_retrain":     getattr(shadow_ai, 'last_retrain_time', None) or "Not yet retrained",
-    }
-
-
-def _compute_detection_quality(db) -> float:
-    """
-    Compute real detection quality from human feedback.
-    = 1 - (false_positive_count / total_feedback).
-    Falls back to 85.0% baseline before any feedback exists.
-    """
-    total_fb = db.query(UserFeedback).count()
-    if total_fb == 0:
-        return 85.0   # baseline — no feedback yet
-    # Count FP verdicts from ShadowPurchase reviewer verdicts
-    fp_count = db.query(ShadowPurchase).filter(
-        ShadowPurchase.false_positive == True
-    ).count()
-    confirmed = db.query(ShadowPurchase).filter(
-        ShadowPurchase.confirmed_shadow == True
-    ).count()
-    total_reviewed = fp_count + confirmed
-    if total_reviewed == 0:
-        return 85.0
-    return round((1 - fp_count / total_reviewed) * 100, 1)
-
-
-@app.get("/api/stats")
-def get_stats(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    return _get_stats_dict(db)
-
-
-# ─── TRANSACTIONS ───────────────────────────────────────
-@app.get("/api/transactions")
-def get_transactions(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    return [
-        {"id": t.id, "date": t.date, "vendor": t.vendor, "amount": t.amount,
-         "description": t.description, "payment_type": t.payment_type,
-         "card_holder": decrypt(t.card_holder), "department": t.department,
-         "is_shadow": t.is_shadow, "matched_po_id": t.matched_po_id,
-         "ai_risk_score": t.ai_risk_score, "ai_category": t.ai_category}
-        for t in db.query(Transaction).order_by(Transaction.date.desc(), Transaction.id.desc()).all()
-    ]
-
-
-# ─── SHADOW PURCHASES ───────────────────────────────────
-
-
-@app.get("/api/v2/generate-report")
-def api_generate_report(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Generates a comprehensive PDF risk report by leveraging the existing shadow report logic."""
-    try:
-        # Instead of reinventing, we call the standardized shadow report logic
-        # which generates the Executive Summary.
-        return download_shadow_report(db)
-    except Exception as e:
-        logger.error(f"Report generation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/shadows")
-def get_shadows(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    shadows = db.query(ShadowPurchase).all()
-    results = []
-    for s in shadows:
-        txn = db.query(Transaction).filter(Transaction.id == s.transaction_id).first()
-        # Fetch risk metric if exists
-        metric = db.query(RiskMetric).filter(RiskMetric.transaction_id == s.transaction_id).first()
-
-        results.append({
-            "id": s.id,
-            "transaction_id": s.transaction_id,
-            "date": txn.date if txn else s.detected_at,
-            "vendor": txn.vendor if txn else "Unknown",
-            "amount": txn.amount if txn else 0,
-            "description": txn.description if txn else s.reason,
-            "department": txn.department if txn else "Unknown",
-            "risk_score": s.risk_score,
-            "confidence_score": s.confidence_score,
-            "data_quality": s.data_quality_flag,
-            "estimated_loss": metric.estimated_loss if metric else 0,
-            "category": metric.category if metric else "Medium",
-            "reason": s.reason,
-            "item_category": s.item_category,
-            "status": s.status,
-            "resolved_po_id": s.resolved_po_id,
-        })
-    return results
-
-
-@app.get("/api/alerts")
-def get_optimized_alerts(limit: int = 50, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """
-    Get shadow purchases grouped by similar patterns to reduce noise.
-    Groups by: vendor + department + item_category (if available)
-    Returns grouped alerts with counts and aggregated amounts.
-    """
-    shadows = db.query(ShadowPurchase).filter(ShadowPurchase.status == "Pending").all()
-
-    groups = {}
-    for s in shadows:
-        txn = db.query(Transaction).filter(Transaction.id == s.transaction_id).first()
-        if not txn:
-            continue
-
-        # Create group key: vendor|department|category
-        group_key = f"{txn.vendor}|{txn.department}|{(s.item_category or 'Uncategorized')}"
-
-        if group_key not in groups:
-            groups[group_key] = {
-                'vendor': txn.vendor,
-                'department': txn.department,
-                'item_category': s.item_category or 'Uncategorized',
-                'count': 0,
-                'total_amount': 0,
-                'total_estimated_loss': 0,
-                'max_risk': 0,
-                'max_confidence': 0,
-                'shadow_ids': [],
-                'sample_shadow_id': s.id,
-                'sample_date': txn.date
-            }
-
-        groups[group_key]['count'] += 1
-        groups[group_key]['total_amount'] += (txn.amount or 0)
-        groups[group_key]['shadow_ids'].append(s.id)
-
-        metric = db.query(RiskMetric).filter(RiskMetric.transaction_id == s.transaction_id).first()
-        groups[group_key]['total_estimated_loss'] += (metric.estimated_loss if metric else 0)
-
-        if s.risk_score and s.risk_score > groups[group_key]['max_risk']:
-            groups[group_key]['max_risk'] = s.risk_score
-
-        if s.confidence_score and s.confidence_score > groups[group_key]['max_confidence']:
-            groups[group_key]['max_confidence'] = s.confidence_score
-
-    alerts = []
-    for key, group in groups.items():
-        avg_risk = group['total_amount'] / group['count'] if group['count'] > 0 else group['max_risk']
-        group['avg_risk'] = avg_risk
-
-        # Priority score (same formula)
-        priority_score = (
-            (avg_risk * 0.35) +
-            (min(group['total_estimated_loss'] / 5000.0, 1.0) * 0.25) +
-            (min(group['count'] / 10.0, 1.0) * 0.20) +
-            ((1.0 - group['max_confidence']) * 0.20)
-        )
-        group['priority_score'] = round(priority_score, 4)
-
-        priority_label = "Low"
-        if priority_score >= 0.7:
-            priority_label = "Critical"
-        elif priority_score >= 0.5:
-            priority_label = "High"
-        elif priority_score >= 0.3:
-            priority_label = "Medium"
-
-        group['priority_label'] = priority_label
-
-        alerts.append({
-            'group_key': key,
-            'vendor': group['vendor'],
-            'department': group['department'],
-            'item_category': group['item_category'],
-            'count': group['count'],
-            'total_amount': round(group['total_amount'], 2),
-            'avg_risk_score': round(avg_risk, 4),
-            'total_estimated_loss': round(group['total_estimated_loss'], 2),
-            'priority_score': priority_score,
-            'priority_label': priority_label,
-            'max_confidence': group['max_confidence'],
-            'shadow_ids': group['shadow_ids'],
-            'sample_shadow_id': group['sample_shadow_id'],
-            'sample_date': group['sample_date']
-        })
-
-    alerts.sort(key=lambda x: x['priority_score'], reverse=True)
-    return {
-        'groups': alerts[:limit],
-        'total_groups': len(alerts),
-        'total_shadows': sum(a['count'] for a in alerts)
-    }
-
-
-# ─── Enterprise Analytics Endpoints ───────────────────
-
-@app.get("/api/risk-analysis")
-def get_risk_analysis(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Detailed financial impact stats."""
-    metrics = db.query(RiskMetric).all()
-    snapshots = db.query(RiskSnapshot).order_by(RiskSnapshot.id.desc()).limit(10).all()
-    
-    total_loss = sum(m.estimated_loss for m in metrics) if metrics else 0
-    high_impact = sum(1 for m in metrics if m.category in ["High", "Critical"]) if metrics else 0
-    
-    return {
-        "metrics": metrics,
-        "history": snapshots[::-1],  # Chronological order
-        "total_potential_loss": round(total_loss, 2),
-        "high_impact_count": high_impact,
-        "exposure_trend": "Increasing" if len(metrics) > 5 else "Stable",
-        "exposure_by_dept": {
-            "Production": round(random.uniform(20000, 50000), 2),
-            "Maintenance": round(random.uniform(10000, 30000), 2),
-            "Engineering": round(random.uniform(5000, 15000), 2),
-            "Facilities": round(random.uniform(1000, 5000), 2)
-        }
-    }
-
-@app.get("/api/decision-support/{shadow_id}")
-def get_decision_support(shadow_id: int, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Fetch XAI (Explanation) + Recommendations for a shadow purchase."""
-    shadow = db.query(ShadowPurchase).filter(ShadowPurchase.id == shadow_id).first()
-    if not shadow:
-        return {"error": "Shadow record not found"}
-
-    txn = db.query(Transaction).filter(Transaction.id == shadow.transaction_id).first()
-    rec = db.query(ActionRecommendation).filter(ActionRecommendation.transaction_id == shadow.transaction_id).first()
-
-    # Build XAI explanation
-    risk_score = shadow.risk_score or 0
-    confidence = shadow.confidence_score or 0.7
-    factors = (shadow.reason or "").split(" | ") if shadow.reason else ["No anomaly factors detected"]
-    severity = "critical" if risk_score > 0.7 else "high" if risk_score > 0.5 else "medium" if risk_score > 0.3 else "low"
-
-    return {
-        "shadow_id": shadow_id,
-        "transaction_id": shadow.transaction_id,
-        "risk_score": risk_score,
-        "confidence": confidence,
-        "severity": severity,
-        "category": shadow.item_category or "General",
-        "factors": factors,
-        "recommendation": rec.recommendation_text if rec else "Monitor activity.",
-        "model_version": "IsolationForest-v3",
-        "feedback_adjustments_applied": shadow_ai._feedback_count,
-    }
-
-@app.get("/api/operational-insights")
-def get_operational_insights(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """
-    Operational health metrics with department-level accountability tracking.
-    Previously duplicated at line ~1830; the stale version returned raw ORM
-    objects (not JSON-serialisable).  This unified version returns structured dicts.
-    """
-    metrics = db.query(BehaviorMetric).order_by(BehaviorMetric.shadow_count.desc()).all()
-    # Ensure detection has run so we have data to show
-    if not metrics:
-        run_detection(db)
-        metrics = db.query(BehaviorMetric).order_by(BehaviorMetric.shadow_count.desc()).all()
-
-    return {
-        "behaviors": [
-            {
-                "employee_id": m.employee_id,
-                "department": m.department,
-                "shadow_count": m.shadow_count,
-                "risk_level": m.risk_level,
-            }
-            for m in metrics[:10]
-        ],
-        "summary": {
-            "total_flagged_users": len(metrics),
-            "high_risk_users": len([m for m in metrics if m.risk_level in ["High", "Critical"]]),
-            "efficiency_gain": "14.2% (Est.)",
-            "human_in_loop_precision": "92.4%",
-            "timestamp": datetime.datetime.now().isoformat(),
-        },
-    }
-
-
-# ─── DETECTION & RESOLUTION ─────────────────────────────
-@app.post("/api/detect-shadow")
-def detect_shadow(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    result = run_detection(db)
-    return {"status": "success", **result}
-
-
-@app.post("/api/resolve/{shadow_id}")
-def api_resolve(shadow_id: int, po_id: Optional[str] = None, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    result = resolve_shadow_purchase(db, shadow_id, po_id)
-    if result.get("status") == "success":
-        _log_event(db, "RECTIFY_SHADOW", str(shadow_id), f"Resolved as PO: {result.get('po_id')}")
-        return result
-    else:
-        # result contains 'error' key if status is not 'success'
-        error_msg = result.get("error", "Unknown error during resolution")
-        raise HTTPException(status_code=400, detail=error_msg)
-
-
-@app.post("/api/dismiss/{shadow_id}")
-def api_dismiss(shadow_id: int, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    from detection import dismiss_shadow_purchase
-    result = dismiss_shadow_purchase(db, shadow_id)
-    if result.get("status") == "success":
-        _log_event(db, "DISMISS_SHADOW", str(shadow_id), "Human investigator dismissed detection for lack of evidence")
-        return result
-    raise HTTPException(status_code=400, detail=result.get("error"))
-
-
-@app.get("/api/charts/spend-distribution")
-def get_spend_distribution(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Aggregate total spend by category for the pie chart."""
-    from sqlalchemy import func
-    results = db.query(Transaction.ai_category, func.sum(Transaction.amount)).group_by(Transaction.ai_category).all()
-    # Default if empty
-    if not results:
-        results = [("Pumps & Motors", 15000), ("Hydraulics", 8000), ("Electrical", 4000), ("Other", 3000)]
-    return {"labels": [r[0] or "General" for r in results], "data": [float(r[1]) for r in results]}
-
-@app.get("/api/charts/shadow-by-dept")
-def get_shadow_by_dept(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Aggregate shadow count by department."""
-    from sqlalchemy import func
-    results = db.query(Transaction.department, func.count(Transaction.id)).filter(Transaction.is_shadow == True).group_by(Transaction.department).all()
-    if not results:
-        results = [("Production", 12), ("Maintenance", 8), ("Engineering", 4), ("Facilities", 1)]
-    return {"labels": [r[0] or "Unknown" for r in results], "data": [int(r[1]) for r in results]}
-
-@app.get("/api/charts/detection-timeline")
-def get_detection_timeline(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Incidence timeline for last 14 detections."""
-    snapshots = db.query(RiskSnapshot).order_by(RiskSnapshot.id.desc()).limit(14).all()
-    data = [s.pending_actions for s in snapshots][::-1]
-    labels = [s.timestamp.split(" ")[1] if " " in s.timestamp else s.timestamp for s in snapshots][::-1]
-    # Filler if no snapshots
-    if not data:
-        data = [2, 5, 3, 8, 4, 6, 7, 5, 9, 3, 2, 4, 1, 5]
-        labels = [f"D-{i}" for i in range(14, 0, -1)]
-    return {"labels": labels, "data": data}
-
-@app.get("/api/charts/risk-distribution")
-def get_risk_distribution(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Risk score distribution computed live from shadow purchase data — no hardcoded values."""
-    shadows = db.query(ShadowPurchase).all()
-    if not shadows:
-        return {
-            "labels": ["Process Bypass", "Price Variance", "Vendor Risk", "Unapproved Source", "Missing PO"],
-            "data": [0.0, 0.0, 0.0, 0.0, 0.0]
-        }
-    txns = {t.id: t for t in db.query(Transaction).all()}
-    vendors = {v.name: v for v in db.query(Vendor).all()}
-    process_bypass, price_var, vendor_risk_scores, unauth_src, missing_po = [], [], [], [], []
-    for s in shadows:
-        txn = txns.get(s.transaction_id)
-        process_bypass.append(1.0 if txn and txn.payment_type in ("Corporate Card", "Expense Claim") else 0.0)
-        price_var.append(min(1.0, txn.amount / 10000.0) if txn else 0.0)
-        v = vendors.get(txn.vendor) if txn else None
-        vendor_risk_scores.append(1.0 if v and v.risk_level == "High" else (0.5 if v and v.risk_level == "Medium" else 0.1))
-        unauth_src.append(1.0 if v and not v.approved else 0.0)
-        missing_po.append(1.0 if not s.resolved_po_id else 0.0)
-    def avg(lst): return round(sum(lst) / len(lst), 2) if lst else 0.0
-    return {
-        "labels": ["Process Bypass", "Price Variance", "Vendor Risk", "Unapproved Source", "Missing PO"],
-        "data": [avg(process_bypass), avg(price_var), avg(vendor_risk_scores), avg(unauth_src), avg(missing_po)]
-    }
-
-@app.get("/api/explain/{shadow_id}")
-def api_explain(shadow_id: int, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    shadow = db.query(ShadowPurchase).filter(ShadowPurchase.id == shadow_id).first()
-    if not shadow:
-        raise HTTPException(status_code=404, detail="Shadow purchase not found")
-    
-    explanation = shadow_ai.explain_detection(shadow.transaction_id, shadow.reason)
-    return {"explanation": explanation}
-
-
-# ─── RECOMMENDATIONS ────────────────────────────────────
-@app.get("/api/recommendations")
-def api_recommendations(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    recs = get_recommendations(db)
-    return recs[:10]
-
-
-# ─── HUMAN FEEDBACK LOOP ────────────────────────────────
-class FeedbackBodyRequest(BaseModel):
-    feedback_type: str = "confirm"
-    corrected_risk: Optional[float] = None
-    notes: Optional[str] = None
-
-@app.post("/api/feedback/{shadow_id}")
-async def submit_feedback_by_id(shadow_id: int, body: FeedbackBodyRequest, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Frontend-friendly feedback endpoint keyed by shadow_id in URL."""
-    shadow = db.query(ShadowPurchase).filter(ShadowPurchase.id == shadow_id).first()
-    if not shadow:
-        raise HTTPException(status_code=404, detail="Shadow purchase not found")
-
-    new_fb = UserFeedback(
-        shadow_id=shadow_id,
-        feedback_type=body.feedback_type,
-        corrected_risk=body.corrected_risk,
-        notes=body.notes,
-        submitted_at=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        applied=True
-    )
-    db.add(new_fb)
-
-    # Apply AI recalibration
-    ai_result = shadow_ai.apply_feedback(
-        body.feedback_type,
-        shadow.risk_score or 0.5,
-        body.corrected_risk,
-    )
-
-    _log_event(db, "HUMAN_FEEDBACK", str(shadow_id), f"Type: {body.feedback_type}, Corrected Risk: {body.corrected_risk}")
-    db.commit()
-
-    # ── AUTO-RETRAIN: trigger after every 10 feedback submissions ──────────
-    total_feedback = db.query(UserFeedback).count()
-    retrain_result = None
-    if total_feedback % 10 == 0 and total_feedback > 0:
-        confirmed = db.query(ShadowPurchase).filter(ShadowPurchase.confirmed_shadow == True).all()
-        false_pos = db.query(ShadowPurchase).filter(ShadowPurchase.false_positive  == True).all()
-        confirmed_features = [f for f in [_txn_to_features(db, s.id) for s in confirmed] if f]
-        fp_features        = [f for f in [_txn_to_features(db, s.id) for s in false_pos]  if f]
-        if confirmed_features or fp_features:
-            retrain_result = shadow_ai.retrain_from_feedback(confirmed_features, fp_features)
-            db.add(AuditLog(
-                action="AUTO_RETRAIN",
-                details=f"Auto-retrain triggered at {total_feedback} feedback submissions. "
-                        f"New contamination: {retrain_result.get('new_contamination', '?')}. "
-                        f"Training samples: {retrain_result.get('training_samples', '?')}.",
-                user="SYSTEM",
-                timestamp=datetime.datetime.now().isoformat(),
-                target_id="ML_MODEL",
-            ))
-            db.commit()
-            await manager.broadcast({
-                "type":    "model_retrained",
-                "trigger": "feedback_threshold",
-                "threshold": total_feedback,
-                "result":  retrain_result,
-            })
-
-    return {
-        "status": "success",
-        "feedback_applied": True,
-        "total_feedback": total_feedback,
-        "auto_retrain_triggered": retrain_result is not None,
-        **ai_result,
-    }
-
-class ShadowFeedbackRequest(BaseModel):
-    verdict: Literal["confirmed_shadow", "false_positive", "needs_review"]
-    """
-    Allowed values:
-      • 'confirmed_shadow' – reviewer agrees this is a real shadow purchase
-      • 'false_positive'   – reviewer says the ML flag was incorrect
-      • 'needs_review'     – escalate to senior analyst; keeps needs_review=True
-    """
-
-@app.post("/api/shadows/{shadow_id}/feedback")
-async def api_shadow_feedback(shadow_id: int, body: ShadowFeedbackRequest, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """LP-01 Feedback Loop on Anomaly Detection"""
-    shadow = db.query(ShadowPurchase).filter(ShadowPurchase.id == shadow_id).first()
-    if not shadow:
-        raise HTTPException(status_code=404, detail="Shadow purchase not found")
-
-    shadow.reviewer_verdict = body.verdict
-    shadow.reviewed_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    shadow.reviewer_id = user
-    shadow.needs_review = False
-
-    if body.verdict == 'confirmed_shadow':
-        shadow.confirmed_shadow = True
-        shadow.false_positive = False
-    elif body.verdict == 'false_positive':
-        shadow.confirmed_shadow = False
-        shadow.false_positive = True
-
-    _log_event(db, "REVIEWER_VERDICT", str(shadow_id), f"Verdict: {body.verdict}, Reviewer: {user}")
-    db.commit()
-
-    # ── AUTO-RETRAIN: trigger after every 10 reviewer verdicts ─────────────
-    total_verdicts = db.query(ShadowPurchase).filter(
-        ShadowPurchase.reviewer_verdict.isnot(None)
-    ).count()
-    retrain_result = None
-    if total_verdicts % 10 == 0 and total_verdicts > 0:
-        confirmed = db.query(ShadowPurchase).filter(ShadowPurchase.confirmed_shadow == True).all()
-        false_pos = db.query(ShadowPurchase).filter(ShadowPurchase.false_positive  == True).all()
-        confirmed_features = [f for f in [_txn_to_features(db, s.id) for s in confirmed] if f]
-        fp_features        = [f for f in [_txn_to_features(db, s.id) for s in false_pos]  if f]
-        if confirmed_features or fp_features:
-            retrain_result = shadow_ai.retrain_from_feedback(confirmed_features, fp_features)
-            db.add(AuditLog(
-                action="AUTO_RETRAIN",
-                details=f"Auto-retrain triggered at {total_verdicts} verdicts. "
-                        f"New contamination: {retrain_result.get('new_contamination', '?')}. "
-                        f"Training samples: {retrain_result.get('training_samples', '?')}.",
-                user="SYSTEM",
-                timestamp=datetime.datetime.now().isoformat(),
-                target_id="ML_MODEL",
-            ))
-            db.commit()
-            await manager.broadcast({
-                "type":    "model_retrained",
-                "trigger": "verdict_threshold",
-                "threshold": total_verdicts,
-                "result":  retrain_result,
-            })
-
-    return {
-        "status": "success",
-        "message": "Feedback recorded",
-        "verdict": body.verdict,
-        "total_verdicts": total_verdicts,
-        "auto_retrain_triggered": retrain_result is not None,
-    }
-
-
-@app.post("/api/feedback")
-def submit_feedback(fb: FeedbackRequest, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    # Legacy endpoint - Map frontend fields to DB model
-    new_fb = UserFeedback(
-        shadow_id=fb.shadow_id,
-        feedback_type="human_correction",
-        corrected_category=fb.category,
-        corrected_risk=fb.revised_score,
-        notes=fb.notes,
-        submitted_at=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        applied=False
-    )
-    db.add(new_fb)
-    db.commit()
-
-    shadow = db.query(ShadowPurchase).get(fb.shadow_id)
-    if shadow:
-        shadow.status = "Resolved"
-        if fb.category: shadow.item_category = fb.category
-        if fb.revised_score: shadow.confidence_score = fb.revised_score
+        db.add(AuditLog(
+            timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            action="USER_LOGIN",
+            user=req.username,
+            target_id="AUTH",
+            details=f"Successful authentication for {req.username} ({role})."
+        ))
         db.commit()
 
-    _log_event(db, "HUMAN_FEEDBACK", str(fb.shadow_id), f"Category: {fb.category}, Revised: {fb.revised_score}")
-    return {"status": "success", "message": "Feedback recorded & shadow rectified"}
-
-
-@app.get("/api/feedback")
-def list_feedback(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    return [
-        {
-            "id": f.id, "shadow_id": f.shadow_id, "transaction_id": getattr(f, 'transaction_id', None),
-            "feedback_type": f.feedback_type, "original_category": getattr(f, 'original_category', None),
-            "corrected_category": getattr(f, 'corrected_category', None), "original_risk": getattr(f, 'original_risk', None),
-            "corrected_risk": f.corrected_risk, "notes": f.notes,
-            "submitted_at": f.submitted_at, "applied": f.applied,
+        return {
+            "status": "success",
+            "token": token,
+            "username": req.username,
+            "role": role,
+            "full_name": full_name,
+            "must_change_password": must_change,
+            "permissions": ROLE_PERMISSIONS.get(role, [])
         }
-        for f in db.query(UserFeedback).order_by(UserFeedback.id.desc()).all()
-    ]
+
+    # Record failed attempt
+    attempts, is_now_locked, lockout_secs = record_failed_login(req.username)
+    if is_now_locked:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Account locked: 5 consecutive failed attempts. Locked for {LOCKOUT_MINUTES} minutes."
+        )
+
+    rem = max(0, 5 - attempts)
+    detail_msg = "Invalid username or passcode."
+    if rem > 0:
+        detail_msg += f" {rem} attempt(s) remaining before account lockout."
+    raise HTTPException(status_code=401, detail=detail_msg)
+
+@app.post("/api/logout")
+async def api_logout(request: Request, response: Response):
+    auth_header = request.headers.get("Authorization", "").strip()
+    token = ""
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+    elif auth_header:
+        token = auth_header
+    if not token:
+        token = request.cookies.get("ss_token")
+    if token and token in AUTHENTICATED_SESSIONS:
+        del AUTHENTICATED_SESSIONS[token]
+    response.delete_cookie("ss_token")
+    return {"status": "success", "message": "Logged out"}
 
 
-# ─── AUDIT LOGS ─────────────────────────────────────────
-def _format_audit_logs(logs):
-    return [
-        {
-            "id": l.id, "timestamp": l.timestamp, "action": l.action,
-            "user": l.user or "System", "target": l.target_id, "details": l.details
-        }
-        for l in logs
-    ]
+# ─── WebSocket Endpoint ──────────────────────────────────────────────
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    token = websocket.cookies.get("ss_token") or websocket.query_params.get("token")
+    allow_test = os.getenv("ALLOW_TEST_ROLE_HEADER", "false").lower() in ("true", "1", "yes")
+    is_valid = False
+    if token and token in AUTHENTICATED_SESSIONS:
+        is_valid = True
+    elif allow_test and (token in ("admin", "manager", "storekeeper") or websocket.headers.get("X-User-Role")):
+        is_valid = True
 
-@app.get("/api/audit-logs")
-def get_audit_logs(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    logs = db.query(AuditLog).order_by(AuditLog.id.desc()).limit(100).all()
-    return _format_audit_logs(logs)
+    if not is_valid:
+        await websocket.close(code=4401)
+        return
 
-@app.get("/api/audit")
-def get_audit(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Alias for /api/audit-logs - used by frontend."""
-    logs = db.query(AuditLog).order_by(AuditLog.id.desc()).limit(100).all()
-    return _format_audit_logs(logs)
+    await manager.connect(websocket)
+    # Send initial payload
+    db = SessionLocal()
+    try:
+        stats_payload = _compute_stats(db)
+        await websocket.send_json({
+            "type": "connection_info",
+            "data": {
+                "clients": len(manager.active_connections),
+                "simulator": simulator_running,
+                "facility": "Anishka Industries, Gurugram"
+            }
+        })
+        await websocket.send_json({
+            "type": "stats_update",
+            "data": stats_payload
+        })
+    finally:
+        db.close()
 
-# _log_event is defined above (line ~245); this duplicate is removed to fix overlapping signatures.
+    try:
+        while True:
+            data = await websocket.receive_text()
+            try:
+                msg = json.loads(data)
+                if msg.get("type") == "ping":
+                    await websocket.send_json({"type": "pong", "data": {"clients": len(manager.active_connections)}})
+            except Exception:
+                pass
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
 
 
-# ─── CSV EXPORTS ────────────────────────────────────────
-import io, csv
+def _compute_stats(db: Session) -> dict:
+    items = db.query(Inventory).filter(Inventory.is_active == True).all()
+    status_map = compute_items_status_map(items, db)
 
-# Note: /api/export/transactions and /api/export/shadows are handled
-# by the generic /api/export/{type} route below to avoid route conflicts.
+    total_val = sum(item.quantity * (item.unit_cost if item.unit_cost and item.unit_cost > 0 else (item.selling_price or item.unit_price or 0.0)) for item in items)
+    total_valuation = sum(item.quantity * (item.selling_price or item.unit_price or 0.0) for item in items)
+    total_units = sum(item.quantity for item in items)
+    total_skus = len(items)
 
+    out_of_stock = sum(1 for s in status_map.values() if s == "OUT")
+    low_stock = sum(1 for s in status_map.values() if s == "LOW")
+    critical_stock = sum(1 for s in status_map.values() if s == "CRITICAL")
+    dead_stock = sum(1 for s in status_map.values() if s == "DEAD")
+    ok_stock = sum(1 for s in status_map.values() if s == "OK")
 
-
-@app.get("/api/export/excel/{type}")
-def export_excel_route(type: str, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """
-    Enterprise Excel Export with professional color coding and structured formatting.
-    Color codes: 
-    - Risk: Red (High), Yellow (Medium), Green (Low)
-    - Status: Pink/Red (Shadow), Light Green (Matched)
-    """
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = type.capitalize()
-    
-    # ─── PROFESSIONAL STYLING ────────────────────────────
-    # Header: Deep Slate
-    header_fill = PatternFill(start_color="1F2937", end_color="1F2937", fill_type="solid")
-    header_font = Font(bold=True, color="FFFFFF", size=11)
-    
-    # Risk Levels
-    risk_high_fill = PatternFill(start_color="FEE2E2", end_color="FEE2E2", fill_type="solid") # Light Red
-    risk_high_font = Font(bold=True, color="991B1B") # Dark Red
-    
-    risk_med_fill = PatternFill(start_color="FEF3C7", end_color="FEF3C7", fill_type="solid") # Light Amber
-    risk_med_font = Font(bold=True, color="92400E") # Dark Amber
-    
-    risk_low_fill = PatternFill(start_color="F0FDF4", end_color="F0FDF4", fill_type="solid") # Light Green
-    risk_low_font = Font(bold=True, color="166534") # Dark Green
-
-    # Status Highlighting
-    status_shadow_fill = PatternFill(start_color="FFE4E1", end_color="FFE4E1", fill_type="solid") # Misty Rose
-    status_shadow_font = Font(bold=True, color="B22222") # Firebrick
-    
-    status_matched_fill = PatternFill(start_color="E0FFE0", end_color="E0FFE0", fill_type="solid") # Honeydew
-    status_matched_font = Font(bold=True, color="006400") # Dark Green
-
-    border_side = Side(style='thin', color="D1D5DB")
-    standard_border = Border(left=border_side, right=border_side, top=border_side, bottom=border_side)
-    
-    # ─── DATA GENERATION ────────────────────────────────
-    if type == "transactions":
-        headers = ["TXN ID", "Date", "Vendor", "Amount", "Dept", "Description", "Method", "Risk", "Status"]
-        ws.append(["SHADOWSYNC ENTERPRISE: TRANSACTION LEDGER"])
-        ws.append([f"Report Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"])
-        ws.append([])
-        ws.append(headers)
-        
-        data = db.query(Transaction).order_by(Transaction.date.desc()).all()
-        for t in data:
-            row = [t.id, t.date, t.vendor, t.amount, t.department, t.description, t.payment_type, t.ai_risk_score, "SHADOW" if t.is_shadow else "MATCHED"]
-            ws.append(row)
-            rn = ws.max_row
-            
-            # Formatting
-            ws.cell(rn, 4).number_format = '"$"#,##0.00'
-            ws.cell(rn, 8).number_format = '0.0'
-            
-            # Risk Coloring (Column 8)
-            r_val = t.ai_risk_score or 0
-            rc = ws.cell(rn, 8)
-            if r_val >= 70: rc.fill, rc.font = risk_high_fill, risk_high_font
-            elif r_val >= 30: rc.fill, rc.font = risk_med_fill, risk_med_font
-            else: rc.fill, rc.font = risk_low_fill, risk_low_font
-            
-            # Status Coloring (Column 9)
-            sc = ws.cell(rn, 9)
-            if t.is_shadow: sc.fill, sc.font = status_shadow_fill, status_shadow_font
-            else: sc.fill, sc.font = status_matched_fill, status_matched_font
-            
-            for c in range(1, 10): ws.cell(rn, c).border = standard_border
-
-    elif type == "shadows" or type == "priority":
-        headers = ["ID", "Detected", "TXN ID", "Vendor", "Amount", "Dept", "Risk Score", "Conf", "Category", "Status", "AI Reasoning", "Est. Loss"]
-        title_text = "SHADOWSYNC ENTERPRISE: DETECTED SHADOW PURCHASES" if type == "shadows" else "SHADOWSYNC ENTERPRISE: PRIORITY RISK QUEUE"
-        ws.append([title_text])
-        ws.append([f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"])
-        ws.append([])
-        ws.append(headers)
-        
-        query = db.query(ShadowPurchase)
-        if type == "priority":
-            query = query.filter(ShadowPurchase.status == "Pending").order_by(ShadowPurchase.priority_score.desc())
-        
-        for s in query.all():
-            txn = db.query(Transaction).filter(Transaction.id == s.transaction_id).first()
-            amount = txn.amount if txn else 0
-            row = [s.id, s.detected_at, s.transaction_id, txn.vendor if txn else "N/A", amount, txn.department if txn else "N/A", s.risk_score, s.confidence_score, s.item_category, s.status, s.reason, s.estimated_loss]
-            ws.append(row)
-            rn = ws.max_row
-            
-            ws.cell(rn, 5).number_format = '"$"#,##0.00'
-            ws.cell(rn, 12).number_format = '"$"#,##0.00'
-            
-            # Risk (Col 7)
-            rv = s.risk_score or 0
-            rc = ws.cell(rn, 7)
-            if rv >= 0.7: rc.fill, rc.font = risk_high_fill, risk_high_font
-            elif rv >= 0.3: rc.fill, rc.font = risk_med_fill, risk_med_font
-            else: rc.fill, rc.font = risk_low_fill, risk_low_font
-            
-            # Status (Col 10)
-            sc = ws.cell(rn, 10)
-            if s.status == "Resolved": sc.fill, sc.font = status_matched_fill, status_matched_font
-            else: sc.fill, sc.font = status_shadow_fill, status_shadow_font
-            
-            for c in range(1, 11): ws.cell(rn, c).border = standard_border
-    else:
-        return export_excel_report(user, db)
-
-    # ─── FINAL POLISH ───────────────────────────────────
-    # Style Header Row
-    header_row_idx = 4
-    for cell in ws[header_row_idx]:
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = Alignment(horizontal="center")
-    
-    # Title Styles
-    ws["A1"].font = Font(bold=True, size=14, color="1F2937")
-    ws["A2"].font = Font(italic=True, color="6B7280", size=10)
-
-    # Auto-width with MergedCell safety
-    for col in ws.columns:
-        max_length = 0
-        column_letter = get_column_letter(col[0].column)
-        for cell in col:
-            if not isinstance(cell, MergedCell):
-                try:
-                    if cell.value and len(str(cell.value)) > max_length: 
-                        max_length = len(str(cell.value))
-                except: pass
-        ws.column_dimensions[column_letter].width = min(max_length + 2, 50)
-
-    out = io.BytesIO()
-    wb.save(out)
-    out.seek(0)
-    
-    _log_event(db, "EXPORT_EXCEL", type, f"User {user} exported {type} report.")
-    return Response(
-        content=out.getvalue(),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="ShadowSync_{type.capitalize()}_{datetime.date.today()}.xlsx"'}
+    dead_stock_val = sum(
+        item.quantity * (item.unit_cost if item.unit_cost and item.unit_cost > 0 else (item.selling_price or item.unit_price or 0.0))
+        for item in items if status_map.get(item.id) == "DEAD"
     )
 
+    pending_pos = db.query(Procurement).filter(Procurement.status.in_(["DRAFT", "APPROVED"])).all()
+    pending_po_count = len(pending_pos)
+    pending_po_value = round(sum(p.total_value or 0.0 for p in pending_pos), 2)
+
+    suppliers_count = db.query(Vendor).count()
+    pos_count = db.query(Procurement).count()
+    movements_count = db.query(StockMovement).count()
+
+    healthy_count = ok_stock
+    health_pct = round((healthy_count / total_skus * 100), 1) if total_skus > 0 else 100.0
+
+    # Calculate Receivables Ageing
+    today_d = datetime.date.today()
+    unpaid_invs = db.query(Invoice).filter(Invoice.status.in_(["UNPAID", "PARTIALLY_PAID"])).all()
+    b_0_30 = 0.0
+    b_31_60 = 0.0
+    b_60_plus = 0.0
+    for inv in unpaid_invs:
+        paid_sum = sum(p.amount for p in inv.payments)
+        bal = max(0.0, inv.total - paid_sum)
+        if bal > 0:
+            try:
+                idat = datetime.date.fromisoformat(inv.date[:10])
+                age = (today_d - idat).days
+            except Exception:
+                age = 0
+            if age <= 30:
+                b_0_30 += bal
+            elif age <= 60:
+                b_31_60 += bal
+            else:
+                b_60_plus += bal
+
+    total_rec = round(b_0_30 + b_31_60 + b_60_plus, 2)
+    rec_ageing = {
+        "bucket_0_30": round(b_0_30, 2),
+        "bucket_31_60": round(b_31_60, 2),
+        "bucket_60_plus": round(b_60_plus, 2),
+        "total_outstanding": total_rec
+    }
+    kpis = compute_business_kpis(db)
+
+    return {
+        "receivables_ageing": rec_ageing,
+        "total_inventory_value": round(total_valuation, 2),
+        "total_valuation": round(total_valuation, 2),
+        "total_cost_value": round(total_val, 2),
+        "total_skus": total_skus,
+        "total_items": total_skus,
+        "total_stock_units": total_units,
+        "low_stock_count": low_stock + critical_stock,
+        "low_stock_items": low_stock + critical_stock,
+        "critical_stock_count": critical_stock,
+        "out_of_stock_items": out_of_stock,
+        "dead_stock_count": dead_stock,
+        "dead_stock_value": round(dead_stock_val, 2),
+        "pending_po_count": pending_po_count,
+        "pending_po_value": pending_po_value,
+        "total_suppliers": suppliers_count,
+        "total_pos": pos_count,
+        "total_movements": movements_count,
+        "inventory_health_pct": health_pct,
+        "inventory_turnover": kpis["inventory_turnover"],
+        "days_of_inventory": kpis["days_of_inventory"],
+        "working_capital_tied_up": kpis["working_capital_tied_up"],
+        "stockout_count_30d": kpis["stockout_count_30d"],
+        "fill_rate_pct": kpis["fill_rate_pct"],
+        "business_kpis": kpis,
+        "sales_funnel": compute_sales_funnel(db),
+        "owner_summary": get_dashboard_owner_summary(db),
+        "status_distribution": {
+            "OK": ok_stock,
+            "LOW": low_stock,
+            "CRITICAL": critical_stock,
+            "OUT": out_of_stock,
+            "DEAD": dead_stock
+        },
+        "facility": "Anishka Industries Gurugram"
+    }
 
 
+# ─── Dashboard Stats & Chart Endpoints ───────────────────────────────
 
-# ─── RISK METRICS ───────────────────────────────────────
-@app.get("/api/risk-metrics")
-def get_risk_metrics(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    # RiskSnapshot has aggregate metrics; RiskMetric has per-transaction analysis
-    snapshots = db.query(RiskSnapshot).order_by(RiskSnapshot.id.desc()).limit(50).all()
-    return [
-        {
-            "id": s.id, "timestamp": s.timestamp, "total_exposure": s.total_exposure,
-            "shadow_rate": round(s.shadow_rate * 100, 2),  # Return as percentage
-            "avg_risk_score": round(s.avg_risk_score, 4),
-            "high_risk_count": s.high_risk_count, "risk_level": s.risk_level,
-            "pending_actions": s.pending_actions,
-        }
-        for s in snapshots
-    ]
+@app.get("/api/stats")
+async def get_stats(db: Session = Depends(get_db)):
+    """Return summary metrics for the executive command center."""
+    return _compute_stats(db)
+
+@app.get("/api/dashboard")
+async def get_dashboard_summary(db: Session = Depends(get_db)):
+    """Comprehensive executive command center payload: metrics, 30-day trend, top 10 fast movers, status distribution."""
+    stats = _compute_stats(db)
+
+    # 30-day trend
+    now = datetime.datetime.now()
+    thirty_days_ago_dt = now - datetime.timedelta(days=30)
+    thirty_days_ago_str = thirty_days_ago_dt.strftime("%Y-%m-%d %H:%M")
+
+    movements_30d = db.query(StockMovement).filter(
+        StockMovement.timestamp >= thirty_days_ago_str
+    ).all()
+
+    daily_map = defaultdict(lambda: {"inward": 0, "outward": 0})
+    item_out_map = defaultdict(int)
+
+    for m in movements_30d:
+        day_str = m.timestamp[:10] if m.timestamp else ""
+        if m.type == "IN":
+            daily_map[day_str]["inward"] += m.quantity
+        elif m.type == "OUT":
+            daily_map[day_str]["outward"] += m.quantity
+            item_out_map[m.item_id] += m.quantity
+
+    trend_30d = []
+    for d in range(30, -1, -1):
+        dt = (now - datetime.timedelta(days=d)).strftime("%Y-%m-%d")
+        trend_30d.append({
+            "date": dt,
+            "inward": daily_map[dt]["inward"],
+            "outward": daily_map[dt]["outward"]
+        })
+
+    # Top 10 fast movers
+    top_item_ids = sorted(item_out_map.keys(), key=lambda x: item_out_map[x], reverse=True)[:10]
+    fast_movers = []
+    if top_item_ids:
+        fast_items = db.query(Inventory).filter(Inventory.id.in_(top_item_ids)).all()
+        item_obj_map = {i.id: i for i in fast_items}
+        for i_id in top_item_ids:
+            it = item_obj_map.get(i_id)
+            if it:
+                fast_movers.append({
+                    "item_id": it.id,
+                    "sku": it.sku,
+                    "name": it.name,
+                    "category": it.category,
+                    "units_dispatched_30d": item_out_map[i_id],
+                    "current_stock": it.quantity
+                })
+
+    return {
+        "stats": stats,
+        "sales_funnel": stats.get("sales_funnel", {}),
+        "receivables_ageing": stats.get("receivables_ageing", {}),
+        "total_skus": stats["total_skus"],
+        "stock_value": stats["total_valuation"],
+        "counts": stats["status_distribution"],
+        "dead_stock_value": stats["dead_stock_value"],
+        "pending_po_count": stats["pending_po_count"],
+        "pending_po_value": stats["pending_po_value"],
+        "status_distribution": stats["status_distribution"],
+        "trend_30d": trend_30d,
+        "fast_movers": fast_movers
+    }
+
+@app.get("/api/forecast/{item_id}")
+async def get_item_forecast(item_id: str, db: Session = Depends(get_db)):
+    """Explainable 30-day forecast: daily run-rate, days remaining, suggested reorder date & quantity."""
+    item = None
+    if item_id.isdigit():
+        item = db.query(Inventory).filter(Inventory.id == int(item_id)).first()
+    if not item:
+        item = db.query(Inventory).filter(Inventory.sku == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found.")
+    fc = calculate_forecast(item, db)
+    sug_res = compute_suggested_reorder_level(item, db)
+    fc["suggested_reorder_level"] = sug_res["suggested_reorder_level"]
+    fc["current_reorder_level"] = sug_res["current_reorder_level"]
+    fc["reorder_level_diff"] = sug_res["diff"]
+    fc["reorder_level_diff_pct"] = sug_res["diff_pct"]
+    return fc
 
 
-# ─── INVENTORY ───────────────────────────────────────────
+# ─── Advanced Analytics & Demand Intelligence Endpoints ───────────────
+
+@app.get("/api/analytics/abc-xyz")
+async def get_analytics_abc_xyz(db: Session = Depends(get_db)):
+    """Return ABC-XYZ classification matrix, Pareto distribution, and per-item metrics."""
+    return compute_abc_xyz_classification(db)
+
+@app.get("/api/analytics/forecast/{item_id}")
+async def get_analytics_advanced_forecast(item_id: str, periods_ahead: int = 8, db: Session = Depends(get_db)):
+    """Return weekly forecast with Exponential Smoothing, prediction intervals, and 8-week backtest WAPE."""
+    item = None
+    if item_id.isdigit():
+        item = db.query(Inventory).filter(Inventory.id == int(item_id)).first()
+    if not item:
+        item = db.query(Inventory).filter(Inventory.sku == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found.")
+    return calculate_advanced_forecast(item, db, periods_ahead=periods_ahead)
+
+@app.post("/api/analytics/what-if")
+async def run_analytics_what_if(req: WhatIfRequest, db: Session = Depends(get_db)):
+    """Run interactive what-if simulation for lead-time delays and demand surges."""
+    item = None
+    if req.item_id:
+        item = db.query(Inventory).filter(Inventory.id == req.item_id).first()
+    elif req.sku:
+        item = db.query(Inventory).filter(Inventory.sku == req.sku).first()
+    if not item:
+        first_item = db.query(Inventory).filter(Inventory.is_active == True).first()
+        if first_item:
+            item = first_item
+        else:
+            raise HTTPException(status_code=404, detail="No item found for simulation.")
+    return compute_what_if_simulation(
+        item=item,
+        db=db,
+        lead_time_delta_days=req.lead_time_delta_days,
+        demand_increase_pct=req.demand_increase_pct
+    )
+
+@app.get("/api/analytics/kpis")
+async def get_analytics_kpis(db: Session = Depends(get_db)):
+    """Return enterprise business KPIs: turnover, DIO, working capital, 30d stockouts, fill rate."""
+    return compute_business_kpis(db)
+
+@app.get("/api/analytics/safety-stock/{item_id}")
+async def get_analytics_safety_stock(item_id: str, service_level: Optional[str] = None, db: Session = Depends(get_db)):
+    """Return statistical safety stock and reorder point with service level and formula breakdown."""
+    item = None
+    if item_id.isdigit():
+        item = db.query(Inventory).filter(Inventory.id == int(item_id)).first()
+    if not item:
+        item = db.query(Inventory).filter(Inventory.sku == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found.")
+    return compute_safety_stock_rop(item, db, service_level=service_level)
+
+@app.get("/api/analytics/anomalies")
+async def get_analytics_anomalies(threshold: float = 3.0, db: Session = Depends(get_db)):
+    """Return statistical movement anomalies based on modified robust z-score (Median/MAD)."""
+    return detect_robust_z_anomalies(db, threshold=threshold)
+
+@app.post("/api/analytics/seed-demo-history")
+async def seed_analytics_demo_history(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Seed 12-month synthetic history with seasonal patterns and injected labeled anomalies."""
+    if current_user.get("role") not in ("admin", "manager"):
+        raise HTTPException(status_code=403, detail="Admin or Manager privileges required to seed demo data.")
+    return seed_twelve_month_analytics_history(db)
+
+@app.get("/api/settings/service-level")
+async def get_service_level_setting(db: Session = Depends(get_db)):
+    """Get current inventory service level configuration."""
+    sl = db.query(AppSetting).filter(AppSetting.key == "service_level").first()
+    sm = db.query(AppSetting).filter(AppSetting.key == "safety_stock_method").first()
+    return {
+        "service_level": sl.value if sl else "95%",
+        "safety_stock_method": sm.value if sm else "safety_days",
+        "supported_levels": ["90%", "95%", "98%"],
+        "z_scores": {"90%": 1.282, "95%": 1.645, "98%": 2.054}
+    }
+
+@app.post("/api/settings/service-level")
+async def set_service_level_setting(
+    req: ServiceLevelSettingRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Update service level configuration."""
+    if current_user.get("role") not in ("admin", "manager"):
+        raise HTTPException(status_code=403, detail="Admin or Manager privileges required to update settings.")
+    
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    sl = db.query(AppSetting).filter(AppSetting.key == "service_level").first()
+    if not sl:
+        sl = AppSetting(key="service_level", value=req.service_level, updated_by=current_user.get("username", "admin"), updated_at=now_str)
+        db.add(sl)
+    else:
+        sl.value = req.service_level
+        sl.updated_by = current_user.get("username", "admin")
+        sl.updated_at = now_str
+
+    if req.safety_stock_method:
+        sm = db.query(AppSetting).filter(AppSetting.key == "safety_stock_method").first()
+        if not sm:
+            sm = AppSetting(key="safety_stock_method", value=req.safety_stock_method, updated_by=current_user.get("username", "admin"), updated_at=now_str)
+            db.add(sm)
+        else:
+            sm.value = req.safety_stock_method
+            sm.updated_by = current_user.get("username", "admin")
+            sm.updated_at = now_str
+
+    db.commit()
+    return {"status": "success", "service_level": req.service_level, "safety_stock_method": req.safety_stock_method or "service_level"}
+
+@app.get("/api/charts/category-distribution")
+async def get_category_distribution(db: Session = Depends(get_db)):
+    """Distribution of inventory valuation by welding category."""
+    items = db.query(Inventory).all()
+    dist = defaultdict(float)
+    count_dist = defaultdict(int)
+    for item in items:
+        val = item.quantity * item.unit_price
+        dist[item.category] += val
+        count_dist[item.category] += 1
+    return {
+        "valuation": {k: round(v, 2) for k, v in dist.items()},
+        "counts": dict(count_dist)
+    }
+
+@app.get("/api/charts/stock-status")
+async def get_stock_status(db: Session = Depends(get_db)):
+    """Categorization of items into In-Stock, Low-Stock, and Out-of-Stock."""
+    items = db.query(Inventory).all()
+    in_stock = 0
+    low_stock = 0
+    out_of_stock = 0
+
+    for item in items:
+        if item.quantity == 0:
+            out_of_stock += 1
+        elif item.quantity <= item.reorder_level:
+            low_stock += 1
+        else:
+            in_stock += 1
+
+    return {
+        "in_stock": in_stock,
+        "low_stock": low_stock,
+        "out_of_stock": out_of_stock
+    }
+
+@app.get("/api/charts/movement-trend")
+async def get_movement_trend(db: Session = Depends(get_db)):
+    """Recent stock movement velocity (Inward vs Outward)."""
+    movements = db.query(StockMovement).order_by(StockMovement.id.desc()).limit(30).all()
+    inwards = sum(m.quantity for m in movements if m.movement_type == "INWARD")
+    outwards = sum(m.quantity for m in movements if m.movement_type == "OUTWARD")
+    return {
+        "total_inward": inwards,
+        "total_outward": outwards,
+        "recent_count": len(movements)
+    }
+
+
+# ─── Inventory Catalog API ───────────────────────────────────────────
+
 @app.get("/api/inventory")
-def get_inventory(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    return [
-        {"id": i.id, "name": i.name, "sku": i.sku, "quantity": i.quantity,
-         "unit_price": i.unit_price, "category": i.category,
-         "reorder_level": i.reorder_level, "location": i.location,
-         "last_updated": getattr(i, 'last_updated', 'N/A'),
-         "status": "Low Stock" if i.quantity <= i.reorder_level else "In Stock"}
-        for i in db.query(Inventory).order_by(Inventory.category).all()
-    ]
+async def get_inventory(
+    category: Optional[str] = None,
+    search: Optional[str] = None,
+    status: Optional[str] = None,
+    sort: Optional[str] = None,
+    page: Optional[int] = None,
+    limit: int = 50,
+    db: Session = Depends(get_db)
+):
+    """Return inventory items with search, category/status filter, sort, and pagination."""
+    q = db.query(Inventory).filter(Inventory.is_active == True)
+    if category and category != "all":
+        q = q.filter(Inventory.category == category)
+    if search:
+        search_fmt = f"%{search.lower()}%"
+        q = q.filter(
+            (func.lower(Inventory.name).like(search_fmt)) |
+            (func.lower(Inventory.sku).like(search_fmt)) |
+            (func.lower(Inventory.location).like(search_fmt))
+        )
 
+    # Sorting
+    sort_map = {
+        "name": Inventory.name, "quantity": Inventory.quantity,
+        "category": Inventory.category, "sku": Inventory.sku,
+        "unit_cost": Inventory.unit_cost, "-quantity": Inventory.quantity.desc(),
+        "-name": Inventory.name.desc(), "-unit_cost": Inventory.unit_cost.desc(),
+    }
+    order_col = sort_map.get(sort) if sort else None
+    if order_col is not None:
+        q = q.order_by(order_col)
+    else:
+        q = q.order_by(Inventory.category, Inventory.name)
+
+    items = q.all()
+
+    # Compute statuses using the shared engine
+    status_map = compute_items_status_map(items, db)
+
+    # Status filter (post-query because it depends on computed status)
+    if status and status.upper() in ("OK", "LOW", "CRITICAL", "OUT", "DEAD"):
+        target_status = status.upper()
+        items = [i for i in items if status_map.get(i.id) == target_status]
+
+    def _serialize(i):
+        s = status_map.get(i.id, "OK")
+        return {
+            "id": i.id, "sku": i.sku, "name": i.name, "category": i.category,
+            "unit": i.unit or "pcs", "compatible_with": i.compatible_with or "Standard",
+            "location": i.location or "Central Store", "quantity": i.quantity,
+            "reorder_level": i.reorder_level, "reorder_qty": i.reorder_qty or 50,
+            "unit_cost": i.unit_cost or 0.0,
+            "selling_price": i.selling_price or i.unit_price or 0.0,
+            "unit_price": i.unit_price or 0.0, "supplier_id": i.supplier_id,
+            "reserved_qty": getattr(i, "reserved_qty", 0) or 0,
+            "available_quantity": max(0, (i.quantity or 0) - (getattr(i, "reserved_qty", 0) or 0)),
+            "hsn_code": getattr(i, "hsn_code", "8466") or "8466",
+            "gst_rate": getattr(i, "gst_rate", 18.0) or 18.0,
+            "last_updated": i.last_updated, "is_active": i.is_active, "status": s,
+        }
+
+    if page is not None:
+        total = len(items)
+        start = (page - 1) * limit
+        page_items = items[start : start + limit]
+        return {"items": [_serialize(i) for i in page_items], "total": total, "page": page, "limit": limit}
+
+    return [_serialize(i) for i in items]
+
+@app.post("/api/inventory/item")
+@app.post("/api/items")
+async def create_inventory_item(
+    item_data: CreateInventoryItemRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Add a new welding spare part to the catalog."""
+    if item_data.supplier_id:
+        sup = db.query(Vendor).filter(Vendor.id == item_data.supplier_id).first()
+        if not sup:
+            raise HTTPException(status_code=400, detail=f"Supplier '{item_data.supplier_id}' does not exist.")
+
+    existing = db.query(Inventory).filter(Inventory.sku == item_data.sku).first()
+    if existing:
+        raise HTTPException(status_code=400, detail=f"SKU {item_data.sku} already exists.")
+
+    cost = item_data.unit_cost or (item_data.unit_price * 0.7 if item_data.unit_price else 0.0)
+    selling = item_data.selling_price or item_data.unit_price or 0.0
+
+    item = Inventory(
+        name=item_data.name,
+        sku=item_data.sku,
+        category=item_data.category,
+        unit=item_data.unit or "pcs",
+        compatible_with=item_data.compatible_with,
+        location=item_data.location or "R1-B01",
+        quantity=item_data.quantity,
+        reorder_level=item_data.reorder_level,
+        reorder_qty=item_data.reorder_qty or 50,
+        unit_cost=cost,
+        selling_price=selling,
+        supplier_id=item_data.supplier_id,
+        hsn_code=item_data.hsn_code or "8466",
+        gst_rate=item_data.gst_rate if item_data.gst_rate is not None else 18.0,
+        reserved_qty=0,
+        last_updated=datetime.datetime.now().isoformat(),
+        is_active=True
+    )
+    db.add(item)
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="ITEM_CREATED",
+        user=current_user["username"],
+        target_id=item_data.sku,
+        details=f"Added {item_data.name} to {item_data.category}."
+    ))
+    db.commit()
+
+    # Requirement C: Event trigger after item create
+    await trigger_replenishment_events([item.id], db, user=current_user["username"])
+
+    await manager.broadcast({"type": "item_created", "data": {"sku": item_data.sku, "name": item_data.name}})
+    stats = _compute_stats(db)
+    await manager.broadcast({"type": "stats_update", "data": stats})
+
+    return {"status": "success", "id": item.id, "sku": item_data.sku}
+
+@app.post("/api/inventory/adjust")
+@app.post("/api/stock/adjust")
+async def adjust_stock(
+    adj: StockAdjustmentRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager", "storekeeper"]))
+):
+    """Adjust physical stock quantity with audit logging and stock movement recording."""
+    item = None
+    if adj.item_id:
+        item = db.query(Inventory).filter(Inventory.id == adj.item_id).first()
+    if not item and adj.sku:
+        item = db.query(Inventory).filter(Inventory.sku == adj.sku).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found.")
+
+    # Idempotent replay for offline queue
+    if adj.client_id:
+        existing = db.query(StockMovement).filter(StockMovement.client_id == adj.client_id).first()
+        if existing:
+            return {
+                "status": "idempotent_replay",
+                "message": "Stock adjustment already processed.",
+                "sku": item.sku,
+                "previous_quantity": item.quantity,
+                "current_quantity": item.quantity,
+                "movement_id": existing.movement_id
+            }
+
+    if not adj.reason or not adj.reason.strip():
+        raise HTTPException(status_code=400, detail="Reason is required for stock adjustments.")
+
+    new_qty = item.quantity + adj.quantity_change
+    if new_qty < 0:
+        raise HTTPException(status_code=400, detail="Stock quantity cannot be negative.")
+
+    prev_qty = item.quantity
+    item.quantity = new_qty
+    item.last_updated = datetime.datetime.now().isoformat()
+
+    m_type = "ADJUST"
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    party_val = adj.destination or "Central Store"
+
+    movement = StockMovement(
+        item_id=item.id,
+        type=m_type,
+        quantity=abs(adj.quantity_change),
+        reference=adj.reference or "Manual Adjustment",
+        party=party_val,
+        performed_by=current_user["username"],
+        timestamp=now_str,
+        balance_after=new_qty,
+        client_id=adj.client_id
+    )
+    db.add(movement)
+
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="STOCK_ADJUSTED",
+        user=current_user["username"],
+        target_id=item.sku,
+        details=f"Stock for {item.sku} changed from {prev_qty} to {new_qty}. Reason: {adj.reason}"
+    ))
+    db.commit()
+
+    # Requirement C: Event trigger after stock adjust
+    await trigger_replenishment_events([item.id], db, user=current_user["username"])
+
+    # WebSocket broadcast
+    await manager.broadcast({
+        "type": "new_stock_movement",
+        "data": {
+            "sku": item.sku, "item_name": item.name, "type": "ADJUSTMENT",
+            "quantity": abs(adj.quantity_change), "destination": adj.destination,
+            "remaining": new_qty, "timestamp": movement.timestamp
+        }
+    })
+    stats = _compute_stats(db)
+    await manager.broadcast({"type": "stats_update", "data": stats})
+
+    return {"status": "success", "sku": item.sku, "previous_quantity": prev_qty, "current_quantity": new_qty}
 
 @app.get("/api/inventory/reorders")
-def get_inventory_reorders(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """REAL-TIME REORDER DETECTION - Returns items that need reordering with suggestions."""
-    from detection import get_inventory_reorders
-    reorders = get_inventory_reorders(db)
-    _log_event(db, "VIEW_REORDERS", "inventory", f"User {user} viewed inventory reorder suggestions ({len(reorders)} items).")
-    return {
-        "items_needing_reorder": reorders,
-        "total_items_flagged": len(reorders),
-        "critical_count": len([r for r in reorders if r["urgency"] == "CRITICAL"]),
-        "high_count": len([r for r in reorders if r["urgency"] == "HIGH"]),
-        "medium_count": len([r for r in reorders if r["urgency"] == "MEDIUM"]),
-    }
-
-
-@app.get("/api/inventory/trends")
-def get_inventory_trends(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """TREND ANALYSIS - Analyzes inventory movements and usage patterns."""
-    from detection import monitor_inventory_trends
-    trends = monitor_inventory_trends(db)
-    _log_event(db, "VIEW_TRENDS", "inventory", f"User {user} viewed inventory trends analysis.")
-    return trends
-
+async def get_reorder_list(db: Session = Depends(get_db)):
+    """Get all items that require replenishment using compute_item_status and real suggested qty."""
+    items = db.query(Inventory).filter(Inventory.is_active == True).all()
+    reorders = []
+    for i in items:
+        status = compute_item_status(i, db)
+        if status in ("LOW", "CRITICAL", "OUT"):
+            fc = calculate_forecast(i, db)
+            suggested_qty = fc.get("suggested_qty") or i.reorder_qty or 50
+            reorders.append({
+                "id": i.id,
+                "sku": i.sku,
+                "name": i.name,
+                "quantity": i.quantity,
+                "reorder_level": i.reorder_level,
+                "suggested_order_qty": suggested_qty,
+                "reorder_qty": i.reorder_qty or 50,
+                "status": status,
+                "category": i.category
+            })
+    return reorders
 
 @app.post("/api/inventory/reorder")
-def create_reorder(item_id: str, order_qty: int = 20, vendor_name: str = "Standard Supplier", 
-                  user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """
-    CREATE REORDER - Automatically generates a procurement order for low-stock items.
-    Tracks usage patterns and suggests quantities based on velocity.
-    """
-    from detection import create_inventory_reorder
-    
-    MAX_ORDER_QTY = 10000  # Guard against runaway reorders
-    if order_qty < 1:
-        raise HTTPException(status_code=400, detail="Order quantity must be at least 1")
-    if order_qty > MAX_ORDER_QTY:
-        raise HTTPException(status_code=400, detail=f"Order quantity cannot exceed {MAX_ORDER_QTY} units per request")
-    
-    result = create_inventory_reorder(db, item_id, order_qty, vendor_name)
-    
-    if result.get("status") == "success":
-        _log_event(db, "AUTO_REORDER", item_id, 
-                  f"User {user} created reorder: {order_qty} units of {result.get('item_name')}")
-        return result
-    else:
-        raise HTTPException(status_code=400, detail=result.get("error"))
+async def trigger_reorder(
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Trigger replenishment using check_and_trigger_auto_reorder with force=True and duplicate protection."""
+    sku = payload.get("sku")
+    if not sku:
+        raise HTTPException(status_code=400, detail="SKU is required.")
+    item = db.query(Inventory).filter(Inventory.sku == sku).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
 
+    triggered, po, alert = check_and_trigger_auto_reorder(
+        item,
+        db,
+        user=current_user["username"],
+        force=True
+    )
 
-@app.post("/api/inventory/auto-reorder-all")
-def auto_reorder_all_critical(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """
-    AUTO-REORDER ALL CRITICAL ITEMS
-    Automatically creates reorder POs for all items flagged as CRITICAL or HIGH urgency.
-    Perfect for scheduled automation.
-    """
-    from detection import get_inventory_reorders, create_inventory_reorder
-    
-    reorder_items = get_inventory_reorders(db)
-    critical_and_high = [r for r in reorder_items if r["urgency"] in ["CRITICAL", "HIGH"]]
-    
-    results = []
-    for item in critical_and_high:
-        result = create_inventory_reorder(db, item["id"], item["suggested_order_qty"])
-        if result.get("status") == "success":
-            results.append(result)
-    
-    _log_event(db, "AUTO_REORDER_BATCH", "all_critical", 
-              f"User {user} auto-reordered {len(results)} critical items.")
-    
+    if not triggered or not po:
+        if alert and "already_on_po" in alert:
+            return {
+                "status": "warning",
+                "message": alert["message"],
+                "po_number": alert["already_on_po"],
+                "item": item.name
+            }
+        existing_open_po_item = db.query(POItem).join(Procurement).filter(
+            POItem.item_id == item.id,
+            Procurement.status.in_(["DRAFT", "APPROVED"])
+        ).first()
+        if existing_open_po_item:
+            open_po = existing_open_po_item.purchase_order or db.query(Procurement).filter(Procurement.id == existing_open_po_item.po_id).first()
+            po_num = open_po.po_number if open_po else f"ANI-PO-2026-{existing_open_po_item.po_id:04d}"
+            return {
+                "status": "warning",
+                "message": f"Already on {po_num}",
+                "po_number": po_num,
+                "item": item.name
+            }
+        return {
+            "status": "warning",
+            "message": "Reorder could not be processed",
+            "item": item.name
+        }
+
+    if alert:
+        await manager.broadcast({"type": "reorder_alert", "data": alert})
+        await manager.broadcast({"type": "low_stock", "data": alert})
+    stats = _compute_stats(db)
+    await manager.broadcast({"type": "stats_update", "data": stats})
+
     return {
         "status": "success",
-        "total_reorders_created": len(results),
-        "reorders": results,
-        "total_cost": sum(r["total_cost"] for r in results),
+        "po_id": po.id,
+        "po_number": po.po_number,
+        "item": item.name,
+        "quantity": alert.get("reorder_qty", item.reorder_qty or 50) if alert else (item.reorder_qty or 50),
+        "message": f"Draft Purchase Order {po.po_number} raised for {item.name}"
     }
 
 
-def _get_inventory_alerts(db: Session) -> list:
-    """Get items that are at or below reorder level."""
-    alerts = []
-    for i in db.query(Inventory).all():
-        if i.quantity <= i.reorder_level:
-            alerts.append({
-                "id": i.id, "name": i.name, "quantity": i.quantity,
-                "reorder_level": i.reorder_level, "category": i.category,
-            })
-    return alerts
+# ─── Items CRUD (update / soft-delete) ───────────────────────────────
+
+@app.put("/api/items/{item_id}")
+async def update_item(
+    item_id: int,
+    data: ItemUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Update an existing inventory item."""
+    item = db.query(Inventory).filter(Inventory.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found.")
+    if data.supplier_id is not None and data.supplier_id != "":
+        sup = db.query(Vendor).filter(Vendor.id == data.supplier_id).first()
+        if not sup:
+            raise HTTPException(status_code=400, detail=f"Supplier '{data.supplier_id}' does not exist.")
+
+    if data.sku and data.sku != item.sku:
+        dup = db.query(Inventory).filter(Inventory.sku == data.sku, Inventory.id != item_id).first()
+        if dup:
+            raise HTTPException(status_code=400, detail=f"SKU {data.sku} already in use.")
+
+    changes = []
+    for field in ["sku", "name", "category", "unit", "compatible_with", "location", "hsn_code", "gst_rate",
+                   "quantity", "reorder_level", "reorder_qty", "unit_cost", "selling_price", "supplier_id"]:
+        val = getattr(data, field, None)
+        if val is not None:
+            old = getattr(item, field)
+            setattr(item, field, val)
+            changes.append(f"{field}: {old} -> {val}")
+    item.last_updated = datetime.datetime.now().isoformat()
+
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="ITEM_UPDATED", user=current_user["username"],
+        target_id=item.sku, details=f"Updated {item.name}: {'; '.join(changes[:5])}"
+    ))
+    db.commit()
+
+    # Requirement C: Event trigger after item edit
+    await trigger_replenishment_events([item.id], db, user=current_user["username"])
+
+    await manager.broadcast({"type": "item_updated", "data": {"id": item.id, "sku": item.sku}})
+    stats = _compute_stats(db)
+    await manager.broadcast({"type": "stats_update", "data": stats})
+    return {"status": "success", "id": item.id, "sku": item.sku}
 
 
-# ─── PROCUREMENT ────────────────────────────────────────
-@app.get("/api/procurement")
-def get_procurement(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    return [
-        {"id": p.id, "vendor_name": p.vendor_name, "item": p.item,
-         "amount": p.amount, "quantity": p.quantity, "date": p.date,
-         "status": p.status, "department": p.department, "source": p.source}
-        for p in db.query(Procurement).order_by(Procurement.date.desc()).all()
-    ]
+@app.delete("/api/items/{item_id}")
+async def delete_item(
+    item_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin"]))
+):
+    """Soft-delete an inventory item (admin only)."""
+    item = db.query(Inventory).filter(Inventory.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found.")
+    item.is_active = False
+    item.last_updated = datetime.datetime.now().isoformat()
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="ITEM_DELETED", user=current_user["username"],
+        target_id=item.sku, details=f"Soft-deleted {item.name} ({item.sku})."
+    ))
+    db.commit()
+    await manager.broadcast({"type": "item_deleted", "data": {"id": item.id, "sku": item.sku}})
+    stats = _compute_stats(db)
+    await manager.broadcast({"type": "stats_update", "data": stats})
+    return {"status": "success", "id": item.id, "message": f"{item.sku} deactivated."}
 
 
-# ─── VENDORS ────────────────────────────────────────────
-@app.get("/api/vendors")
-def get_vendors(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    result = []
-    for v in db.query(Vendor).all():
-        shadow_count = db.query(ShadowPurchase).join(
-            Transaction, ShadowPurchase.transaction_id == Transaction.id
-        ).filter(Transaction.vendor == v.name).count()
-        total_spend = sum(
-            t.amount for t in db.query(Transaction).filter(Transaction.vendor == v.name).all()
-        )
-        result.append({
-            "id": v.id, "name": v.name, "category": v.category,
-            "risk_level": v.risk_level, "approved": v.approved,
-            "shadow_count": shadow_count, "total_spend": round(total_spend, 2),
-            "trust_score": round(v.trust_score or 50, 1),
-        })
-    return sorted(result, key=lambda x: x["shadow_count"], reverse=True)
+# ─── Dedicated Stock In / Out Endpoints ──────────────────────────────
 
+@app.post("/api/stock/in")
+async def stock_in(
+    req: StockInRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager", "storekeeper"]))
+):
+    """Receive stock into inventory."""
+    item = None
+    if req.item_id:
+        item = db.query(Inventory).filter(Inventory.id == req.item_id).first()
+    if not item and req.sku:
+        item = db.query(Inventory).filter(Inventory.sku == req.sku).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found.")
 
-# ─── PDF DOWNLOADS ──────────────────────────────────────
-# Strategy: Generate PDF → save to temp file → return FileResponse
-# with Content-Disposition: attachment. The browser MUST download.
+    # Idempotent replay for offline queue
+    if req.client_id:
+        existing = db.query(StockMovement).filter(StockMovement.client_id == req.client_id).first()
+        if existing:
+            return {
+                "status": "idempotent_replay",
+                "message": "Stock receipt already processed.",
+                "sku": item.sku,
+                "quantity_added": req.quantity,
+                "current_quantity": item.quantity,
+                "movement_id": existing.movement_id
+            }
 
-# DOWNLOAD_DIR already defined at top of file
+    item.quantity += req.quantity
+    item.last_updated = datetime.datetime.now().isoformat()
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
 
-@app.get("/api/procurement/download/all")
-def download_all_po_pdf(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    pos = db.query(Procurement).order_by(Procurement.date.desc()).all()
-    po_list = [
-        {"id": p.id, "vendor_name": p.vendor_name, "item": p.item,
-         "amount": p.amount, "quantity": p.quantity, "date": p.date,
-         "status": p.status, "department": p.department, "source": p.source}
-        for p in pos
-    ]
-    from pdf_generator import generate_bulk_pdf
-    pdf_bytes = generate_bulk_pdf(po_list)
-    
-    filename = f"Nexus_Procurement_Index_{datetime.date.today().isoformat()}.pdf"
-    _log_event(db, "PDF_EXPORT", "all_procurement", f"User {user} downloaded all procurement documents.")
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'inline; filename="{filename}"',
-            "Access-Control-Expose-Headers": "Content-Disposition",
-            "Cache-Control": "no-cache, no-store, must-revalidate"
-        }
+    movement = StockMovement(
+        item_id=item.id, type="IN", quantity=req.quantity,
+        reference=req.reference or "Goods Receipt",
+        party=req.supplier or "Authorized OEM",
+        performed_by=current_user["username"], timestamp=now_str,
+        balance_after=item.quantity,
+        client_id=req.client_id
     )
+    db.add(movement)
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="STOCK_IN", user=current_user["username"],
+        target_id=item.sku,
+        details=f"Received {req.quantity} units of {item.name}. Balance: {item.quantity}."
+    ))
+    db.commit()
+
+    # Requirement C: Event trigger after stock in
+    await trigger_replenishment_events([item.id], db, user=current_user["username"])
+
+    await manager.broadcast({"type": "new_stock_movement", "data": {
+        "sku": item.sku, "item_name": item.name, "type": "INWARD",
+        "quantity": req.quantity, "destination": "Central Store",
+        "remaining": item.quantity, "timestamp": now_str
+    }})
+    stats = _compute_stats(db)
+    await manager.broadcast({"type": "stats_update", "data": stats})
+
+    return {"status": "success", "sku": item.sku, "quantity_added": req.quantity,
+            "current_quantity": item.quantity, "movement_id": movement.movement_id}
 
 
+@app.post("/api/stock/out")
+async def stock_out(
+    req: StockOutRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager", "storekeeper"]))
+):
+    """Dispatch stock from inventory. Rejects if insufficient stock."""
+    item = None
+    if req.item_id:
+        item = db.query(Inventory).filter(Inventory.id == req.item_id).first()
+    if not item and req.sku:
+        item = db.query(Inventory).filter(Inventory.sku == req.sku).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found.")
 
-@app.get("/api/procurement/{po_id}/pdf")
-def download_po_pdf_route(po_id: str, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    po = db.query(Procurement).filter(Procurement.id == po_id).first()
-    if not po:
-        raise HTTPException(status_code=404, detail="PO not found")
-    po_dict = {
-        "id": po.id, "vendor_name": po.vendor_name, "item": po.item,
-        "amount": po.amount, "quantity": po.quantity, "date": po.date,
-        "status": po.status, "department": po.department, "source": po.source,
-    }
-    doc_type = "invoice" if po.source == "Nexus" else "po"
+    # Idempotent replay for offline queue
+    if req.client_id:
+        existing = db.query(StockMovement).filter(StockMovement.client_id == req.client_id).first()
+        if existing:
+            return {
+                "status": "idempotent_replay",
+                "message": "Stock dispatch already processed.",
+                "sku": item.sku,
+                "current_quantity": item.quantity,
+                "movement_id": existing.movement_id
+            }
 
-    from pdf_generator import generate_document_pdf
-    pdf_bytes = generate_document_pdf(po_dict, document_type=doc_type)
-    
-    filename = f"Nexus_{doc_type.upper()}_{po_id}.pdf"
-    
-    # Enhanced logic: Get reasoning from ShadowPurchase if this was a shadow resolution
-    audit_context = None
-    shadow = db.query(ShadowPurchase).filter(ShadowPurchase.resolved_po_id == po_id).first()
-    if shadow:
-        audit_context = shadow.reason
+    if item.quantity < req.quantity:
+        raise HTTPException(status_code=400, detail=f"Insufficient stock. Available: {item.quantity}, requested: {req.quantity}")
 
-    from pdf_generator import generate_document_pdf
-    pdf_bytes = generate_document_pdf(po_dict, document_type=doc_type, audit_context=audit_context)
-    
-    _log_event(db, "PDF_EXPORT", str(po_id), f"User {user} downloaded document PDF (Type: {doc_type}).")
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'inline; filename="{filename}"',
-            "Access-Control-Expose-Headers": "Content-Disposition",
-            "Cache-Control": "no-cache, no-store, must-revalidate"
-        }
+    item.quantity -= req.quantity
+    item.last_updated = datetime.datetime.now().isoformat()
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    movement = StockMovement(
+        item_id=item.id, type="OUT", quantity=req.quantity,
+        reference=req.invoice_no or "DISP-ISSUE",
+        party=req.customer or "Welding Line",
+        performed_by=current_user["username"], timestamp=now_str,
+        balance_after=item.quantity,
+        client_id=req.client_id
     )
+    db.add(movement)
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="STOCK_OUT", user=current_user["username"],
+        target_id=item.sku,
+        details=f"Dispatched {req.quantity} units of {item.name}. Balance: {item.quantity}."
+    ))
+    db.commit()
+
+    # Requirement C: Event trigger after stock out
+    await trigger_replenishment_events([item.id], db, user=current_user["username"])
+
+    await manager.broadcast({"type": "new_stock_movement", "data": {
+        "sku": item.sku, "item_name": item.name, "type": "OUTWARD",
+        "quantity": req.quantity, "destination": req.customer or "Welding Line",
+        "remaining": item.quantity, "timestamp": now_str
+    }})
+    stats = _compute_stats(db)
+    await manager.broadcast({"type": "stats_update", "data": stats})
+
+    return {"status": "success", "sku": item.sku, "quantity_dispatched": req.quantity,
+            "current_quantity": item.quantity, "movement_id": movement.movement_id}
 
 
+# ─── Stock Movements Ledger API ───────────────────────────────────────
 
-@app.post("/api/vendor/rectify-all/{vendor_name}")
-def rectify_all_vendor(vendor_name: str, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    try:
-        from detection import resolve_all_vendor_shadows
-        result = resolve_all_vendor_shadows(db, vendor_name)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/shadow-purchases/download/all")
-# NOTE: /api/pdf/bulk-procurement canonical definition is below; alias removed to avoid FastAPI route conflicts.
-def download_shadow_report_alias(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Executive Risk Report showing financial vulnerabilities."""
-    from sqlalchemy import func
-    from database import RiskSnapshot, Transaction, ShadowPurchase, ActionRecommendation
-    from pdf_generator import generate_dashboard_report_pdf
-
-    # 1. Get Latest Risk Stats
-    latest = db.query(RiskSnapshot).order_by(RiskSnapshot.id.desc()).first()
-    
-    # Calculate avg confidence from all shadow purchases
-    all_shadows = db.query(ShadowPurchase).all()
-    avg_conf = sum(s.confidence_score for s in all_shadows) / len(all_shadows) if all_shadows else 0.95
-    
-    stats = {
-        "exposure": f"${latest.total_exposure:,.2f}" if latest else "$0.00",
-        "shadow_rate": f"{latest.shadow_rate:.1%}" if latest else "0.0%",
-        "risk_level": (latest.risk_level if latest else "LOW").upper(),
-        "avg_confidence": avg_conf
-    }
-
-    # 2. Risk Vendors with AI Reasoning sample
-    v_data = db.query(Transaction.vendor, func.count(ShadowPurchase.id), func.sum(Transaction.amount))\
-               .join(ShadowPurchase, ShadowPurchase.transaction_id == Transaction.id)\
-               .group_by(Transaction.vendor).all()
-    
-    risk_vendors = []
-    for v in v_data:
-        # Get one representative reason for this vendor
-        sample_shadow = db.query(ShadowPurchase).join(Transaction)\
-                          .filter(Transaction.vendor == v[0]).first()
-        risk_vendors.append({
-            "name": v[0], 
-            "count": v[1], 
-            "amount": float(v[2] or 0.0),
-            "top_reason": sample_shadow.reason if sample_shadow else "Pattern anomaly detected."
-        })
-
-    # 3. Real Tactical Recommendations
-    recs = db.query(ActionRecommendation).order_by(ActionRecommendation.id.desc()).limit(5).all()
-    rec_list = [{"text": r.recommendation_text, "priority": r.priority, "owner": "Operations"} for r in recs]
-
-    # 4. Historical Trend Data for Charts
-    snapshots = db.query(RiskSnapshot).order_by(RiskSnapshot.timestamp.asc()).limit(14).all()
-    trend_data = [
-        {
-            "date": s.timestamp.split("T")[0],
-            "total_exposure": s.total_exposure,
-            "shadow_rate": s.shadow_rate
-        }
-        for s in snapshots
-    ]
-
-    pdf_bytes = generate_dashboard_report_pdf(stats, risk_vendors, recommendations=rec_list, trend_data=trend_data)
-    
-    filename = f"Nexus_Executive_Summary_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-    _log_event(db, "PDF_EXPORT", "executive_summary", f"User {user} downloaded executive summary report.")
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "Access-Control-Expose-Headers": "Content-Disposition",
-            "Cache-Control": "no-cache, no-store, must-revalidate"
-        }
-    )
-
-# /api/pdf/dashboard-report is defined further below with full PDF generation logic.
-# ─── PDF ALIASES (frontend-expected routes) ─────────────
-# ─── CSV EXPORTS ─────────────────────────────────────────
-
-@app.get("/api/export/{type}")
-@app.get("/api/export/csv/{type}")
-def export_csv_data(type: str, request: Request, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Dynamic CSV Ledger Generation with professional formatting, data validation, and clear structure."""
-    # Delegate to specialized handlers that would otherwise be shadowed by this generic route
-    if type == "comprehensive":
-        return export_comprehensive(request=request, user=user, db=db)
-    import io, csv
-    output = io.StringIO()
-    writer = csv.writer(output, quoting=csv.QUOTE_MINIMAL, lineterminator='\n')
-    
-    if type == "shadows" or type == "priority":
-        # Shadow purchases with risk indicators
-        writer.writerow([])
-        title_text = "SHADOW PURCHASES AUDIT LOG" if type == "shadows" else "PRIORITY RISK QUEUE"
-        writer.writerow([title_text])
-        writer.writerow(["Generated:", datetime.datetime.now().isoformat()])
-        writer.writerow([])
-        
-        writer.writerow(["ID", "Detected At", "Transaction ID", "Vendor", "Amount (USD)", "Department", "Risk Score", "Risk Level", "Confidence", "Category", "Reason", "Status", "Estimated Loss", "Priority Score"])
-        
-        query = db.query(ShadowPurchase)
-        if type == "priority":
-            query = query.filter(ShadowPurchase.status == "Pending").order_by(ShadowPurchase.priority_score.desc())
+@app.get("/api/stock-movements")
+async def get_stock_movements(
+    item_id: Optional[int] = None,
+    sku: Optional[str] = None,
+    type: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    page: Optional[int] = None,
+    limit: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Return historical stock movement ledger entries with optional filters and pagination."""
+    q = db.query(StockMovement).join(Inventory)
+    if item_id:
+        q = q.filter(StockMovement.item_id == item_id)
+    if sku:
+        q = q.filter(Inventory.sku == sku)
+    if type:
+        t_upper = type.upper()
+        if t_upper in ("IN", "INWARD", "RECEIPT"):
+            q = q.filter(StockMovement.type == "IN")
+        elif t_upper in ("OUT", "OUTWARD", "DISPATCH"):
+            q = q.filter(StockMovement.type == "OUT")
         else:
-            query = query.order_by(ShadowPurchase.id.desc())
-            
-        for s in query.all():
-            txn = db.query(Transaction).filter(Transaction.id == s.transaction_id).first()
-            vendor = txn.vendor if txn else "N/A"
-            amount = f"{txn.amount:.2f}" if (txn and txn.amount is not None) else "0.00"
-            dept = txn.department if txn else "N/A"
-            risk_score = s.risk_score if s.risk_score is not None else 0.0
-            risk_level = "HIGH (>0.7)" if risk_score >= 0.7 else "MEDIUM (0.3-0.7)" if risk_score >= 0.3 else "LOW (<0.3)"
-            confidence = f"{s.confidence_score:.2f}" if (s.confidence_score is not None) else "0.00"
-            category = s.item_category or "General"
-            reason = (s.reason or "").replace('\n', ' ').replace(',', ';')
-            writer.writerow([
-                s.id, s.detected_at, s.transaction_id, vendor, amount, dept,
-                f"{risk_score:.2f}", risk_level, confidence, category, reason, s.status,
-                f"{s.estimated_loss:.2f}", f"{s.priority_score:.2f}"
-            ])
-            
-    elif type == "transactions":
-        # Transactions with structured presentation
-        writer.writerow([])
-        writer.writerow(["TRANSACTIONS LEDGER"])
-        writer.writerow(["Generated:", datetime.datetime.now().isoformat()])
-        writer.writerow([])
-        
-        writer.writerow(["Transaction ID", "Date", "Vendor", "Amount (USD)", "Department", "Description", "Payment Type", "Card Holder", "Is Shadow", "Risk Score", "Risk Level", "Matched PO"])
-        data = db.query(Transaction).order_by(Transaction.date.desc()).all()
-        for t in data:
-            vendor = t.vendor or "N/A"
-            amount = f"{t.amount:.2f}" if (t.amount is not None) else "0.00"
-            description = (t.description or "").replace('\n', ' ').replace(',', ';')
-            dept = t.department or ""
-            payment_type = t.payment_type or ""
-            cardholder = t.card_holder or ""
-            is_shadow = "YES" if t.is_shadow else "NO"
-            risk_score = t.ai_risk_score if t.ai_risk_score is not None else 0.0
-            risk_level = "HIGH (>0.7)" if risk_score >= 0.7 else "MEDIUM (0.3-0.7)" if risk_score >= 0.3 else "LOW (<0.3)"
-            matched_po = t.matched_po_id or "N/A"
-            writer.writerow([
-                t.id, t.date, vendor, amount, dept, description, payment_type,
-                cardholder, is_shadow, f"{risk_score:.2f}", risk_level, matched_po
-            ])
-            
-    elif type == "audit":
-        # Audit logs with action details
-        writer.writerow([])
-        writer.writerow(["AUDIT LOGS - COMPLIANCE TRACKING"])
-        writer.writerow(["Generated:", datetime.datetime.now().isoformat()])
-        writer.writerow([])
-        
-        writer.writerow(["Timestamp", "Action", "User", "Target", "Details"])
-        logs = db.query(AuditLog).order_by(AuditLog.id.desc()).all()
-        for l in logs:
-            timestamp = l.timestamp or ""
-            action = l.action or ""
-            user_name = l.user or "System Administrator"
-            target = l.target_id or "N/A"
-            details = (l.details or "").replace('\n', ' ').replace(',', ';')
-            writer.writerow([timestamp, action, user_name, target, details])
-            
-    elif type == "procurement":
-        # Procurement records with status tracking
-        writer.writerow([])
-        writer.writerow(["PROCUREMENT ORDERS"])
-        writer.writerow(["Generated:", datetime.datetime.now().isoformat()])
-        writer.writerow([])
-        
-        writer.writerow(["PO ID", "Date", "Vendor", "Item", "Amount (USD)", "Quantity", "Department", "Status", "Source"])
-        pos = db.query(Procurement).order_by(Procurement.date.desc()).all()
-        for p in pos:
-            po_id = p.id or "N/A"
-            date = p.date or ""
-            vendor = p.vendor_name or "N/A"
-            item = (p.item or "General Hardware").replace(',', ';')
-            amount = f"{p.amount:.2f}" if (p.amount is not None) else "0.00"
-            qty = p.quantity or 1
-            dept = p.department or "Operations"
-            status = p.status or "Pending"
-            source = p.source or "Manual"
-            writer.writerow([po_id, date, vendor, item, amount, qty, dept, status, source])
+            q = q.filter(StockMovement.type == t_upper)
+    if start_date:
+        q = q.filter(StockMovement.timestamp >= start_date)
+    if end_date:
+        q = q.filter(StockMovement.timestamp <= end_date + " 23:59:59")
+
+    q = q.order_by(StockMovement.id.desc())
+
+    def _mov_dict(m):
+        return {
+            "id": m.id,
+            "movement_id": m.movement_id,
+            "item_id": m.item_id,
+            "sku": m.sku,
+            "item_name": m.item_name,
+            "type": m.type,
+            "movement_type": m.movement_type,
+            "quantity": m.quantity,
+            "reference": m.reference,
+            "party": m.party,
+            "destination_or_source": m.destination_or_source,
+            "performed_by": m.performed_by,
+            "operator": m.operator,
+            "timestamp": m.timestamp,
+            "balance_after": m.balance_after,
+            "notes": m.notes
+        }
+
+    if page is not None:
+        page_num = max(1, page)
+        page_size = max(1, limit or 50)
+        total = q.count()
+        movements = q.offset((page_num - 1) * page_size).limit(page_size).all()
+        return {
+            "movements": [_mov_dict(m) for m in movements],
+            "total": total,
+            "page": page_num,
+            "limit": page_size,
+            "pages": (total + page_size - 1) // page_size if page_size else 1
+        }
+
+    movements = q.limit(limit or 100).all()
+    return [_mov_dict(m) for m in movements]
+
+@app.post("/api/stock-movements")
+async def record_stock_movement(
+    data: StockMovementCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager", "storekeeper"]))
+):
+    """Record a new stock inward, dispatch, or return."""
+    item = db.query(Inventory).filter(Inventory.sku == data.sku).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="SKU not found in inventory catalog.")
+
+    # Idempotent replay for offline queue
+    if data.client_id:
+        existing = db.query(StockMovement).filter(StockMovement.client_id == data.client_id).first()
+        if existing:
+            return {
+                "status": "idempotent_replay",
+                "message": "Stock movement already processed.",
+                "sku": item.sku,
+                "current_quantity": item.quantity,
+                "movement_id": existing.movement_id
+            }
+
+    raw_type = (data.type or data.movement_type or "OUTWARD").upper()
+    if raw_type in ["OUT", "OUTWARD", "DISPATCH"]:
+        m_type = "OUT"
+        if item.quantity < data.quantity:
+            raise HTTPException(status_code=400, detail=f"Insufficient stock on hand ({item.quantity} available). Stock cannot be negative.")
+        item.quantity -= data.quantity
+    elif raw_type in ["IN", "INWARD", "RECEIPT", "RETURN"]:
+        m_type = "IN"
+        item.quantity += data.quantity
     else:
-        raise HTTPException(status_code=400, detail=f"Invalid export type '{type}'. Use: shadows, transactions, audit, or procurement")
-    
-    _log_event(db, "EXPORT_CSV", type, f"User {user} exported {type} ledger as CSV (structured format).")
-    filename = f"Nexus_{type.capitalize()}_Ledger_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    return Response(
-        content=output.getvalue(),
-        media_type="text/csv; charset=utf-8",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "Access-Control-Expose-Headers": "Content-Disposition",
-            "Cache-Control": "no-cache, no-store, must-revalidate"
+        m_type = "ADJUST"
+
+    item.last_updated = datetime.datetime.now().isoformat()
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    party_val = data.party or data.destination_or_source or "Central Store"
+    operator_val = current_user.get("username") or data.performed_by or data.operator or "storekeeper"
+
+    movement = StockMovement(
+        item_id=item.id,
+        type=m_type,
+        quantity=data.quantity,
+        reference=data.reference or f"REF-{random.randint(100, 999)}",
+        party=party_val,
+        performed_by=operator_val,
+        timestamp=now_str,
+        balance_after=item.quantity,
+        client_id=data.client_id
+    )
+    db.add(movement)
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action=f"STOCK_{movement.movement_type}",
+        user=operator_val,
+        target_id=item.sku,
+        details=f"{movement.movement_type} of {data.quantity} units for {item.name}. Ref: {data.reference}"
+    ))
+    db.commit()
+
+    if m_type == "OUT":
+        triggered, po, alert = check_and_trigger_auto_reorder(item, db, user=operator_val)
+        if triggered and alert:
+            await manager.broadcast({"type": "low_stock", "data": alert})
+            await manager.broadcast({"type": "reorder_alert", "data": alert})
+
+    # WebSocket broadcast
+    await manager.broadcast({
+        "type": "new_stock_movement",
+        "data": {
+            "movement_id": movement.movement_id,
+            "sku": item.sku,
+            "item_name": item.name,
+            "type": movement.movement_type,
+            "quantity": data.quantity,
+            "destination": party_val,
+            "remaining": item.quantity,
+            "timestamp": movement.timestamp
         }
+    })
+    stats = _compute_stats(db)
+    await manager.broadcast({"type": "stats_update", "data": stats})
+
+    return {"status": "success", "movement_id": movement.movement_id, "remaining_quantity": item.quantity}
+
+
+# ─── Purchase Orders & Procurement API ───────────────────────────────
+
+def _po_to_dict(p: Procurement) -> dict:
+    overdue = False
+    days_late = 0
+    if p.status in ("APPROVED", "PARTIALLY_RECEIVED") and p.expected_date:
+        try:
+            exp_d = datetime.date.fromisoformat(str(p.expected_date)[:10])
+            today_d = datetime.date.today()
+            if exp_d < today_d:
+                overdue = True
+                days_late = (today_d - exp_d).days
+        except Exception:
+            pass
+
+    return {
+        "id": p.id,
+        "po_number": p.po_number,
+        "supplier_id": p.supplier_id,
+        "vendor_id": p.vendor_id,
+        "vendor_name": p.vendor_name,
+        "item": p.item,
+        "amount": p.amount,
+        "total_value": p.total_value,
+        "quantity": p.quantity,
+        "date": p.date,
+        "created_at": p.created_at,
+        "expected_date": p.expected_date,
+        "status": p.status,
+        "auto_generated": p.auto_generated,
+        "auto_approved": bool(getattr(p, "auto_approved", False)),
+        "overdue": overdue,
+        "days_late": days_late,
+        "department": p.department,
+        "source": p.source,
+        "items": [
+            {
+                "id": it.id,
+                "item_id": it.item_id,
+                "sku": it.item.sku if it.item else "",
+                "name": it.item.name if it.item else "",
+                "category": it.item.category if it.item else "",
+                "qty": it.qty,
+                "received_qty": getattr(it, "received_qty", 0) or 0,
+                "outstanding_qty": max(0, it.qty - (getattr(it, "received_qty", 0) or 0)),
+                "unit_cost": it.unit_cost,
+                "total": round(it.qty * it.unit_cost, 2),
+                "reason": getattr(it, "reason", "") or ""
+            }
+            for it in p.items
+        ] if p.items else []
+    }
+
+@app.get("/api/procurement")
+async def get_procurement(db: Session = Depends(get_db)):
+    """Return all Purchase Orders."""
+    orders = db.query(Procurement).order_by(Procurement.id.desc()).all()
+    return [_po_to_dict(p) for p in orders]
+
+
+@app.get("/api/procurement/sample-documents")
+async def get_sample_documents(
+    current_user: dict = Depends(require_roles(["admin", "manager", "storekeeper"]))
+):
+    """List available demo delivery documents with descriptions."""
+    return [
+        {
+            "key": "sample_challan_clean",
+            "title": "Clean Delivery Challan",
+            "supplier": "Abicor Binzel",
+            "po_ref": "ANI-PO-2026-0008",
+            "description": "Clean shipment with exact matching items, quantities, and pricing.",
+            "flags": []
+        },
+        {
+            "key": "sample_challan_short",
+            "title": "Short Delivery Challan",
+            "supplier": "Ador Welding",
+            "po_ref": "ANI-PO-2026-0007",
+            "description": "Partial delivery shipment where 300 of 450 units are dispatched.",
+            "flags": ["quantity_mismatch"]
+        },
+        {
+            "key": "sample_invoice_price_hike",
+            "title": "Tax Invoice with Price Increase",
+            "supplier": "Abicor Binzel",
+            "po_ref": "ANI-PO-2026-0008",
+            "description": "Invoice with +16.2% price variance and an unapproved extra line item.",
+            "flags": ["price_variance", "not_on_po"]
+        }
+    ]
+
+@app.get("/api/procurement/{po_id}")
+async def get_purchase_order(po_id: str, db: Session = Depends(get_db)):
+    """Return a single Purchase Order with full details and line items."""
+    po = None
+    if po_id.isdigit():
+        po = db.query(Procurement).filter(Procurement.id == int(po_id)).first()
+    if not po:
+        po = db.query(Procurement).filter(Procurement.po_number == po_id).first()
+    if not po and po_id.startswith("PO-2026-"):
+        po = db.query(Procurement).filter(
+            Procurement.po_number == po_id.replace("PO-2026-", "ANI-PO-2026-0")
+        ).first()
+    if not po:
+        raise HTTPException(status_code=404, detail="Purchase Order not found.")
+    return _po_to_dict(po)
+
+@app.post("/api/procurement")
+async def create_purchase_order(
+    po_data: CreatePORequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Create a new formal purchase order (admin or manager only)."""
+    supplier_id = po_data.supplier_id or po_data.vendor_id or "V001"
+    vendor = db.query(Vendor).filter(Vendor.id == supplier_id).first()
+    vendor_name = vendor.name if vendor else "Approved Supplier"
+
+    po_count = db.query(Procurement).count()
+    po_num = po_data.po_number or f"ANI-PO-2026-{po_count + 1:04d}"
+
+    expected_d = (datetime.date.today() + datetime.timedelta(days=vendor.lead_time_days if vendor else 3)).isoformat()
+
+    po = Procurement(
+        po_number=po_num,
+        supplier_id=supplier_id,
+        status="DRAFT",
+        created_at=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        expected_date=expected_d,
+        total_value=0.0,
+        auto_generated=False,
+        department=po_data.department or "Central Store"
+    )
+    db.add(po)
+    db.flush()
+
+    line_items_total = 0.0
+    if po_data.items:
+        for it in po_data.items:
+            inv_it = None
+            if isinstance(it, dict):
+                if it.get("item_id"):
+                    inv_it = db.query(Inventory).filter(Inventory.id == it["item_id"]).first()
+                elif it.get("sku"):
+                    inv_it = db.query(Inventory).filter(Inventory.sku == it["sku"]).first()
+                qty = it.get("qty", 1)
+                cost = it.get("unit_cost") if it.get("unit_cost") is not None else (inv_it.unit_cost if inv_it else 0.0)
+            else:
+                qty = getattr(it, "qty", 1)
+                cost = getattr(it, "unit_cost", None) or 0.0
+                if getattr(it, "item_id", None):
+                    inv_it = db.query(Inventory).filter(Inventory.id == it.item_id).first()
+                elif getattr(it, "sku", None):
+                    inv_it = db.query(Inventory).filter(Inventory.sku == it.sku).first()
+                if inv_it and cost == 0.0:
+                    cost = inv_it.unit_cost
+
+            if inv_it:
+                db.add(POItem(
+                    po_id=po.id,
+                    item_id=inv_it.id,
+                    qty=qty,
+                    unit_cost=cost
+                ))
+                line_items_total += (qty * cost)
+    else:
+        inv_it = db.query(Inventory).filter(Inventory.name == po_data.item).first() or db.query(Inventory).first()
+        qty = po_data.quantity or 1
+        cost = inv_it.unit_cost if inv_it else 100.0
+        if inv_it:
+            db.add(POItem(
+                po_id=po.id,
+                item_id=inv_it.id,
+                qty=qty,
+                unit_cost=cost
+            ))
+            line_items_total = qty * cost
+
+    po.total_value = round(line_items_total if line_items_total > 0 else (po_data.amount or 0.0), 2)
+
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="PO_CREATED",
+        user=current_user["username"],
+        target_id=po_num,
+        details=f"Raised Purchase Order {po_num} with {vendor_name} (Rs. {po.total_value:,.2f})."
+    ))
+    db.commit()
+
+    await manager.broadcast({"type": "po_created", "data": _po_to_dict(po)})
+    stats = _compute_stats(db)
+    await manager.broadcast({"type": "stats_update", "data": stats})
+
+    return {"status": "success", "id": po.id, "po_id": po.po_number, "po_number": po.po_number, "vendor_name": vendor_name, "total_value": po.total_value}
+
+@app.post("/api/procurement/{po_id}/approve")
+async def approve_purchase_order(
+    po_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Approve a Purchase Order (admin/manager only, storekeeper blocked)."""
+    po = None
+    if po_id.isdigit():
+        po = db.query(Procurement).filter(Procurement.id == int(po_id)).first()
+    if not po:
+        po = db.query(Procurement).filter(Procurement.po_number == po_id).first()
+    if not po:
+        raise HTTPException(status_code=404, detail="Purchase Order not found.")
+
+    if po.status in ("RECEIVED", "CANCELLED"):
+        raise HTTPException(status_code=400, detail=f"Cannot approve PO with status {po.status}.")
+
+    po.status = "APPROVED"
+
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="PO_APPROVED",
+        user=current_user["username"],
+        target_id=po.po_number,
+        details=f"Approved Purchase Order {po.po_number}."
+    ))
+    db.commit()
+    queue_po_approval_email(po, db)
+
+    await manager.broadcast({"type": "po_status_change", "data": {"id": po.id, "po_number": po.po_number, "status": "APPROVED"}})
+    stats = _compute_stats(db)
+    await manager.broadcast({"type": "stats_update", "data": stats})
+
+    return {"status": "success", "po_number": po.po_number, "status": "APPROVED", "new_status": "APPROVED"}
+
+@app.post("/api/procurement/{po_id}/receive")
+async def receive_purchase_order(
+    po_id: str,
+    req: Optional[POReceiveRequest] = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager", "storekeeper"]))
+):
+    """Receive a Purchase Order, adding stock to inventory, supporting partial receipts."""
+    po = None
+    if po_id.isdigit():
+        po = db.query(Procurement).filter(Procurement.id == int(po_id)).first()
+    if not po:
+        po = db.query(Procurement).filter(Procurement.po_number == po_id).first()
+    if not po:
+        raise HTTPException(status_code=404, detail="Purchase Order not found.")
+
+    if po.status == "RECEIVED":
+        raise HTTPException(status_code=400, detail="Purchase Order has already been fully received.")
+    if po.status == "CANCELLED":
+        raise HTTPException(status_code=400, detail="Cannot receive a cancelled Purchase Order.")
+
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    now_iso = datetime.datetime.now().isoformat()
+    supplier_name = po.supplier.name if po.supplier else "Supplier"
+
+    custom_received = {}
+    if req and req.items:
+        for item_rcv in req.items:
+            custom_received[item_rcv.item_id] = item_rcv.qty_received
+
+    for line in po.items:
+        curr_rcv = getattr(line, "received_qty", 0) or 0
+        outstanding = max(0, line.qty - curr_rcv)
+        if req and req.items:
+            rcv_qty = custom_received.get(line.item_id, 0)
+        else:
+            rcv_qty = outstanding
+
+        if rcv_qty <= 0:
+            continue
+
+        actual_rcv = min(rcv_qty, outstanding) if outstanding > 0 else rcv_qty
+        line.received_qty = curr_rcv + actual_rcv
+
+        inv_item = line.item
+        if inv_item:
+            inv_item.quantity += actual_rcv
+            inv_item.last_updated = now_iso
+
+            movement = StockMovement(
+                item_id=inv_item.id,
+                type="IN",
+                quantity=actual_rcv,
+                reference=po.po_number,
+                party=supplier_name,
+                performed_by=current_user["username"],
+                timestamp=now_str,
+                balance_after=inv_item.quantity
+            )
+            db.add(movement)
+
+            db.add(AuditLog(
+                timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                action="STOCK_IN",
+                user=current_user["username"],
+                target_id=inv_item.sku,
+                details=f"Received {actual_rcv} units from PO {po.po_number}. New balance: {inv_item.quantity}."
+            ))
+
+    all_fully_received = all((getattr(l, "received_qty", 0) or 0) >= l.qty for l in po.items) if po.items else True
+    po.status = "RECEIVED" if all_fully_received else "PARTIALLY_RECEIVED"
+
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="PO_RECEIVED" if all_fully_received else "PO_PARTIALLY_RECEIVED",
+        user=current_user["username"],
+        target_id=po.po_number,
+        details=f"{'Fully received' if all_fully_received else 'Partially received'} items for Purchase Order {po.po_number} into Central Store."
+    ))
+    db.commit()
+
+    # Requirement C: Event trigger after PO receive
+    await trigger_replenishment_events([l.item_id for l in po.items], db, user=current_user["username"])
+
+    await manager.broadcast({"type": "po_status_change", "data": {"id": po.id, "po_number": po.po_number, "status": po.status}})
+    stats = _compute_stats(db)
+    await manager.broadcast({"type": "stats_update", "data": stats})
+
+    return {"status": "success", "po_number": po.po_number, "status": po.status, "new_status": po.status}
+
+@app.post("/api/procurement/{po_id}/cancel")
+async def cancel_purchase_order(
+    po_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Cancel a Purchase Order."""
+    po = None
+    if po_id.isdigit():
+        po = db.query(Procurement).filter(Procurement.id == int(po_id)).first()
+    if not po:
+        po = db.query(Procurement).filter(Procurement.po_number == po_id).first()
+    if not po:
+        raise HTTPException(status_code=404, detail="Purchase Order not found.")
+
+    if po.status == "RECEIVED":
+        raise HTTPException(status_code=400, detail="Cannot cancel an already received Purchase Order.")
+
+    po.status = "CANCELLED"
+    po_item_ids = [line.item_id for line in po.items]
+
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="PO_CANCELLED",
+        user=current_user["username"],
+        target_id=po.po_number,
+        details=f"Cancelled Purchase Order {po.po_number}."
+    ))
+    db.commit()
+
+    # Requirement C: Event trigger after PO cancel (items on cancelled PO)
+    await trigger_replenishment_events(po_item_ids, db, user=current_user["username"])
+
+    await manager.broadcast({"type": "po_status_change", "data": {"id": po.id, "po_number": po.po_number, "status": "CANCELLED"}})
+    stats = _compute_stats(db)
+    await manager.broadcast({"type": "stats_update", "data": stats})
+
+    return {"status": "success", "po_number": po.po_number, "status": "CANCELLED", "new_status": "CANCELLED"}
+
+
+# ─── Delivery Document Scanning & AI Verification ─────────────────────
+
+@app.post("/api/procurement/scan-document")
+async def scan_delivery_document(
+    file: Optional[UploadFile] = File(None),
+    sample_key: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager", "storekeeper"]))
+):
+    """Upload delivery challan / invoice, perform vision OCR, and match with open POs."""
+    if sample_key and sample_key in CANNED_SAMPLES:
+        sample_data = CANNED_SAMPLES[sample_key]
+        filename = f"{sample_key}.pdf"
+        sample_path = os.path.join(SAMPLES_DIR, filename)
+        if os.path.exists(sample_path):
+            with open(sample_path, "rb") as sf:
+                file_bytes = sf.read()
+        else:
+            file_bytes = b"SAMPLE_DOCUMENT"
+        file_path, content_hash, safe_fn = save_uploaded_document(file_bytes, filename, "application/pdf")
+        extraction = DeliveryDocExtraction(**sample_data)
+    elif file:
+        file_bytes = await file.read()
+        if not file_bytes:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+        try:
+            file_path, content_hash, safe_fn = save_uploaded_document(
+                file_bytes, file.filename or "document.pdf", file.content_type or "application/pdf"
+            )
+        except ValueError as ve:
+            raise HTTPException(status_code=400, detail=str(ve))
+        extraction = extract_document_data(file_bytes, file.filename or "", file.content_type or "")
+    else:
+        raise HTTPException(status_code=400, detail="Please provide a delivery document file or select a sample document.")
+
+    # Cross-reference match with open POs
+    matched_result = match_extraction_with_po(extraction, db)
+
+    # Persist DocExtraction record in PENDING_REVIEW state
+    now_iso = datetime.datetime.now().isoformat()
+    doc_rec = DocExtraction(
+        created_at=now_iso,
+        uploaded_by=current_user["username"],
+        file_path=file_path,
+        content_hash=content_hash,
+        document_number=extraction.document_number,
+        document_date=extraction.document_date,
+        supplier_name=extraction.supplier_name,
+        po_reference=extraction.po_reference,
+        matched_po_id=matched_result["po"]["id"],
+        raw_extraction=extraction.model_dump_json(),
+        matched_lines=json.dumps(matched_result["lines"]),
+        status="PENDING_REVIEW",
+        fields_corrected=0
+    )
+    db.add(doc_rec)
+    db.commit()
+    db.refresh(doc_rec)
+
+    matched_result["extraction_id"] = doc_rec.id
+    matched_result["file_name"] = os.path.basename(file_path)
+    matched_result["file_url"] = f"/api/uploads/{os.path.basename(file_path)}"
+
+    return matched_result
+
+
+@app.post("/api/procurement/scan-document/{extraction_id}/confirm")
+async def confirm_scanned_delivery(
+    extraction_id: int,
+    req: ScanDocConfirmRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager", "storekeeper"]))
+):
+    """Confirm reviewed document, execute receipt on PO, attach doc, and record audit trail."""
+    try:
+        res = confirm_and_receive_delivery(
+            extraction_id=extraction_id,
+            reviewed_lines=req.reviewed_lines,
+            fields_corrected=req.fields_corrected,
+            db=db,
+            user=current_user["username"]
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+
+    # Event triggers and real-time broadcasts
+    stats = _compute_stats(db)
+    await manager.broadcast({"type": "stats_update", "data": stats})
+    await manager.broadcast({"type": "inventory_updated"})
+    await manager.broadcast({"type": "po_status_change", "data": {"status": res.get("po_status")}})
+
+    return res
+
+
+@app.get("/api/uploads/{filename}")
+async def get_uploaded_document(
+    filename: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Serve uploaded delivery documents securely. Requires authenticated user."""
+    safe_name = os.path.basename(filename)
+    target_path = os.path.join(UPLOAD_DIR, safe_name)
+    if not os.path.exists(target_path):
+        raise HTTPException(status_code=404, detail="Requested document not found.")
+    return FileResponse(target_path)
+
+
+@app.get("/api/procurement/scan-document/accuracy")
+async def get_doc_scan_accuracy(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager", "storekeeper"]))
+):
+    """Return document scanning verification accuracy metrics and correction analytics."""
+    return get_scan_accuracy_report(db)
+
+
+@app.get("/api/pdf/dispatch/{movement_id}")
+async def download_dispatch_note_pdf(movement_id: str, db: Session = Depends(get_db)):
+    """Generate official Goods Dispatch Note / Issue Challan PDF."""
+    movement = None
+    if movement_id.isdigit():
+        movement = db.query(StockMovement).filter(StockMovement.id == int(movement_id)).first()
+    if not movement and movement_id.startswith("MOV-"):
+        try:
+            m_id = int(movement_id.replace("MOV-", ""))
+            movement = db.query(StockMovement).filter(StockMovement.id == m_id).first()
+        except ValueError:
+            pass
+    if not movement:
+        movement = db.query(StockMovement).filter(StockMovement.reference == movement_id).first()
+    if not movement:
+        raise HTTPException(status_code=404, detail="Stock movement record not found.")
+
+    dispatch_data = {
+        "movement_id": movement.movement_id,
+        "timestamp": movement.timestamp,
+        "party": movement.party or "Assembly Shop Floor",
+        "reference": movement.reference or "Store Issue",
+        "performed_by": movement.performed_by or "storekeeper",
+        "items": [
+            {
+                "sku": movement.sku,
+                "name": movement.item_name,
+                "category": movement.item.category if movement.item else "Welding Spares",
+                "quantity": movement.quantity,
+                "unit": movement.item.unit if movement.item else "pcs"
+            }
+        ]
+    }
+    pdf_bytes = generate_dispatch_note_pdf(dispatch_data)
+    filename = f"Anishka_Dispatch_{movement.movement_id}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
 
-@app.get("/api/export/comprehensive")
-@limiter.limit("5/minute")
-def export_comprehensive(request: Request, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """
-    Comprehensive structured Excel report with dashboard summary, statistics, and color-coded data.
-    Perfect for C-level executives and compliance teams.
-    """
-    import openpyxl
-    from openpyxl.styles import numbers, Border, Side
-    
-    wb = openpyxl.Workbook()
-    
-    # Define styles
-    header_font = Font(bold=True, color="FFFFFF", size=12)
-    header_fill = PatternFill(start_color="1F2937", end_color="1F2937", fill_type="solid")
-    title_font = Font(bold=True, size=16, color="1F2937")
-    section_font = Font(bold=True, size=11, color="FFFFFF")
-    section_fill = PatternFill(start_color="3B82F6", end_color="3B82F6", fill_type="solid")
-    
-    risk_high = PatternFill(start_color="EF4444", end_color="EF4444", fill_type="solid")
-    risk_medium = PatternFill(start_color="F59E0B", end_color="F59E0B", fill_type="solid")
-    risk_low = PatternFill(start_color="10B981", end_color="10B981", fill_type="solid")
-    font_white = Font(bold=True, color="FFFFFF", size=10)
-    
-    thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), 
-                        top=Side(style='thin'), bottom=Side(style='thin'))
-    
-    # 1. SUMMARY SHEET
-    ws_summary = wb.active
-    ws_summary.title = "Dashboard"
-    
-    ws_summary['A1'] = "NEXUS SUPPLY INTEGRITY - EXECUTIVE DASHBOARD"
-    ws_summary['A1'].font = title_font
-    ws_summary.merge_cells('A1:D1')
-    ws_summary['A2'] = f"Generated: {datetime.datetime.now().isoformat()}"
-    ws_summary['A2'].font = Font(italic=True, size=10)
-    ws_summary.merge_cells('A2:D2')
-    
-    # Statistics
-    total_txn = db.query(Transaction).count()
-    total_shadows = db.query(ShadowPurchase).count()
-    total_spend = sum(t.amount for t in db.query(Transaction).all()) if total_txn > 0 else 0
-    high_risk_count = len([s for s in db.query(ShadowPurchase).all() if (s.risk_score or 0) >= 0.7])
-    
-    row = 4
-    ws_summary[f'A{row}'] = "KEY METRICS"
-    ws_summary[f'A{row}'].font = section_font
-    ws_summary[f'A{row}'].fill = section_fill
-    ws_summary.merge_cells(f'A{row}:D{row}')
-    
-    row += 2
-    ws_summary[f'A{row}'] = "Total Transactions:"
-    ws_summary[f'B{row}'] = total_txn
-    ws_summary[f'B{row}'].font = Font(bold=True, size=11)
-    
-    row += 1
-    ws_summary[f'A{row}'] = "Shadow Purchases Flagged:"
-    ws_summary[f'B{row}'] = total_shadows
-    ws_summary[f'B{row}'].font = Font(bold=True, size=11)
-    
-    row += 1
-    ws_summary[f'A{row}'] = "Total Spend (USD):"
-    ws_summary[f'B{row}'] = total_spend
-    ws_summary[f'B{row}'].number_format = '$#,##0.00'
-    ws_summary[f'B{row}'].font = Font(bold=True, size=11)
-    
-    row += 1
-    ws_summary[f'A{row}'] = "High Risk Items:"
-    ws_summary[f'B{row}'] = high_risk_count
-    ws_summary[f'B{row}'].font = Font(bold=True, size=11, color="FFFFFF")
-    ws_summary[f'B{row}'].fill = risk_high
-    
-    # 2. SHADOWS SHEET
-    ws_shadows = wb.create_sheet("Shadows", 1)
-    headers = ["ID", "Detected At", "Vendor", "Amount", "Risk Score", "Confidence", "Category", "Status", "AI Reasoning", "Estimated Loss"]
-    ws_shadows.append(headers)
-    
-    for cell in ws_shadows[1]:
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal="center")
-        cell.border = thin_border
-    
-    for s in db.query(ShadowPurchase).all():
-        txn = db.query(Transaction).filter(Transaction.id == s.transaction_id).first()
-        risk = s.risk_score or 0.0
-        row_data = [s.id, s.detected_at, txn.vendor if txn else "N/A", 
-                   txn.amount if txn else 0, risk, s.confidence_score or 0,
-                   s.item_category or "General", s.status, s.reason, s.estimated_loss]
-        ws_shadows.append(row_data)
-        row_num = ws_shadows.max_row
-        
-        # Format and color code risk column
-        risk_cell = ws_shadows.cell(row=row_num, column=5)
-        risk_cell.number_format = '0.00'
-        if risk >= 0.7:
-            risk_cell.fill = risk_high
-            risk_cell.font = font_white
-        elif risk >= 0.3:
-            risk_cell.fill = risk_medium
-            risk_cell.font = font_white
-        else:
-            risk_cell.fill = risk_low
-            risk_cell.font = font_white
-        
-        # Format amount and estimated loss
-        ws_shadows.cell(row=row_num, column=4).number_format = '$#,##0.00'
-        ws_shadows.cell(row=row_num, column=10).number_format = '$#,##0.00'
-        ws_shadows.cell(row=row_num, column=6).number_format = '0.00'
-    
-    ws_shadows.column_dimensions['A'].width = 8
-    ws_shadows.column_dimensions['B'].width = 15
-    ws_shadows.column_dimensions['C'].width = 20
-    ws_shadows.column_dimensions['D'].width = 12
-    ws_shadows.column_dimensions['E'].width = 10
-    ws_shadows.column_dimensions['F'].width = 12
-    ws_shadows.column_dimensions['G'].width = 15
-    ws_shadows.column_dimensions['H'].width = 12
-    ws_shadows.column_dimensions['I'].width = 40 # AI Reasoning
-    ws_shadows.column_dimensions['J'].width = 15 # Estimated Loss
-    
-    # 3. TRANSACTIONS SHEET
-    ws_trans = wb.create_sheet("Transactions", 2)
-    headers = ["ID", "Date", "Vendor", "Amount", "Department", "Risk", "Status"]
-    ws_trans.append(headers)
-    
-    for cell in ws_trans[1]:
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal="center")
-        cell.border = thin_border
-    
-    for t in db.query(Transaction).order_by(Transaction.date.desc()).all():
-        risk = t.ai_risk_score or 0.0
-        row_data = [t.id, t.date, t.vendor or "N/A", t.amount or 0, 
-                   t.department or "", risk, "SHADOW" if t.is_shadow else "MATCHED"]
-        ws_trans.append(row_data)
-        row_num = ws_trans.max_row
-        
-        # Format and color code
-        ws_trans.cell(row=row_num, column=4).number_format = '$#,##0.00'
-        risk_cell = ws_trans.cell(row=row_num, column=6)
-        risk_cell.number_format = '0.00'
-        if risk >= 0.7:
-            risk_cell.fill = risk_high
-            risk_cell.font = font_white
-        elif risk >= 0.3:
-            risk_cell.fill = risk_medium
-            risk_cell.font = font_white
-        else:
-            risk_cell.fill = risk_low
-            risk_cell.font = font_white
-    
-    ws_trans.column_dimensions['A'].width = 12
-    ws_trans.column_dimensions['B'].width = 12
-    ws_trans.column_dimensions['C'].width = 18
-    ws_trans.column_dimensions['D'].width = 12
-    ws_trans.column_dimensions['E'].width = 14
-    ws_trans.column_dimensions['F'].width = 10
-    ws_trans.column_dimensions['G'].width = 10
-    
-    # 4. VENDOR RISK MATRIX SHEET
-    ws_vendor = wb.create_sheet("Vendor Risk", 3)
-    v_headers = ["Vendor Name", "Incident Count", "Total Exposure", "Avg Risk Score", "Alert Level"]
-    ws_vendor.append(v_headers)
-    
-    for cell in ws_vendor[1]:
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal="center")
-        cell.border = thin_border
-    
-    v_data = db.query(
-        Transaction.vendor,
-        func.count(Transaction.id),
-        func.sum(Transaction.amount),
-        func.avg(Transaction.ai_risk_score)
-    ).group_by(Transaction.vendor).order_by(func.avg(Transaction.ai_risk_score).desc()).all()
-    
-    for v in v_data:
-        v_name, v_count, v_total, v_avg_risk = v
-        v_avg_risk = v_avg_risk or 0.0
-        v_alert = "CRITICAL" if v_avg_risk >= 0.7 else "WATCHLIST" if v_avg_risk >= 0.3 else "CLEAR"
-        
-        ws_vendor.append([v_name or "N/A", v_count, v_total or 0, v_avg_risk, v_alert])
-        rn = ws_vendor.max_row
-        
-        # Color coding Alert Level
-        a_cell = ws_vendor.cell(rn, 5)
-        if v_alert == "CRITICAL":
-            a_cell.fill = risk_high
-            a_cell.font = font_white
-        elif v_alert == "WATCHLIST":
-            a_cell.fill = risk_medium
-            a_cell.font = font_white
-        else:
-            a_cell.fill = risk_low
-            a_cell.font = font_white
-            
-        ws_vendor.cell(rn, 3).number_format = '$#,##0.00'
-        ws_vendor.cell(rn, 4).number_format = '0.00'
-        
-    ws_vendor.column_dimensions['A'].width = 25
-    ws_vendor.column_dimensions['B'].width = 15
-    ws_vendor.column_dimensions['C'].width = 18
-    ws_vendor.column_dimensions['D'].width = 15
-    ws_vendor.column_dimensions['E'].width = 15
-    
-    out = io.BytesIO()
-    wb.save(out)
-    out.seek(0)
-    
-    _log_event(db, "EXPORT_EXCEL", "comprehensive", f"User {user} exported comprehensive structured report.")
-    filename = f"Nexus_Comprehensive_Report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+@app.get("/api/pdf/dashboard-report")
+@app.get("/api/v2/generate-report")
+async def download_valuation_report_pdf(db: Session = Depends(get_db)):
+    """Generate executive inventory valuation report PDF."""
+    stats = _compute_stats(db)
+    low_stock = db.query(Inventory).filter(Inventory.quantity <= Inventory.reorder_level).all()
+    low_stock_list = [{"sku": i.sku, "name": i.name, "category": i.category, "quantity": i.quantity, "reorder_level": i.reorder_level} for i in low_stock]
+
+    items = db.query(Inventory).all()
+    cat_breakdown = defaultdict(float)
+    for i in items:
+        cat_breakdown[i.category] += (i.quantity * i.unit_price)
+
+    pdf_bytes = generate_dashboard_report_pdf(stats, low_stock_list, dict(cat_breakdown))
+    filename = f"Anishka_Inventory_Valuation_{datetime.date.today().isoformat()}.pdf"
     return Response(
-        content=out.getvalue(),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "Access-Control-Expose-Headers": "Content-Disposition",
-            "Cache-Control": "no-cache, no-store, must-revalidate"
-        }
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
 
 @app.get("/api/pdf/bulk-procurement")
-def pdf_bulk_procurement(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Download all procurement orders as a bulk PDF - called by frontend 'Download All POs'."""
-    from database import Procurement
-    pos = db.query(Procurement).order_by(Procurement.date.desc()).all()
+@app.get("/api/procurement/download/all")
+async def download_bulk_po_pdf(db: Session = Depends(get_db)):
+    """Generate and stream a multi-page PDF containing all purchase orders."""
+    pos = db.query(Procurement).all()
     po_list = [
-        {
-            "id": po.id, "vendor_id": getattr(po, 'vendor_id', None), "vendor_name": po.vendor_name,
-            "item": po.item, "amount": po.amount, "quantity": po.quantity,
-            "date": po.date, "status": po.status, "department": po.department,
-            "source": getattr(po, 'source', 'Manual')
-        }
-        for po in pos
+        {"id": p.id, "date": p.date, "vendor_name": p.vendor_name, "item": p.item, "amount": p.amount, "quantity": p.quantity, "status": p.status}
+        for p in pos
     ]
-    from pdf_generator import generate_bulk_pdf
     pdf_bytes = generate_bulk_pdf(po_list)
-    filename = f"Nexus_Procurement_Index_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-
-    _log_event(db, "PDF_EXPORT", "bulk_procurement", f"User {user} downloaded bulk procurement index ({len(po_list)} items).")
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "Access-Control-Expose-Headers": "Content-Disposition",
-            "Cache-Control": "no-cache, no-store, must-revalidate"
-        }
+        headers={"Content-Disposition": 'attachment; filename="Anishka_All_Purchase_Orders.pdf"'}
     )
 
+@app.get("/api/procurement/{po_id}/pdf")
 @app.get("/api/pdf/{po_id}")
-def pdf_single_po_route(po_id: str, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Download single PO as PDF - called by frontend per-row PDF button."""
-    if po_id == "dashboard-report":
-        return pdf_dashboard_report(user=user, db=db)
-    from database import Procurement
-    po = db.query(Procurement).filter(Procurement.id == po_id).first()
-    if not po: raise HTTPException(status_code=404, detail="PO not found")
-    po_dict = {
-        "id": po.id, "vendor_id": getattr(po, 'vendor_id', None), "vendor_name": po.vendor_name,
-        "item": po.item, "amount": po.amount, "quantity": po.quantity, "date": po.date,
-        "status": po.status, "department": po.department,
-        "source": getattr(po, 'source', 'Manual'),
-    }
-    doc_type = "invoice" if getattr(po, 'source', '') == "Nexus" else "po"
-
-    # Attach audit context if this PO was created from a shadow resolution
-    audit_context = None
-    shadow = db.query(ShadowPurchase).filter(ShadowPurchase.resolved_po_id == po_id).first()
-    if shadow:
-        audit_context = shadow.reason
-
-    from pdf_generator import generate_document_pdf
-    pdf_bytes = generate_document_pdf(po_dict, document_type=doc_type, audit_context=audit_context)
-    filename = f"Nexus_{doc_type.upper()}_{po_id}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-
-    _log_event(db, "PDF_EXPORT", str(po_id), f"User {user} downloaded document PDF (Type: {doc_type}).")
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "Access-Control-Expose-Headers": "Content-Disposition",
-            "Cache-Control": "no-cache, no-store, must-revalidate"
-        }
-    )
-
-@app.get("/api/trends")
-def get_trends(
-    days: int = 30,
-    period: str = "month",
-    user: str = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    Unified trend endpoint (merged from two formerly-duplicate definitions).
-
-    Returns both:
-    • Time-series risk snapshots (used by the dashboard apex-charts)
-    • Week-over-week shadow activity breakdown (used by the Trend Insights panel)
-
-    Query params:
-      days   – number of risk snapshot records to return (default: 30)
-      period – 'week' or 'month' for the shadow activity summary (default: 'month')
-    """
-    from database import RiskSnapshot
-
-    # ─── Time-series snapshots (for charts) ─────────────────────────────────
-    snapshots = db.query(RiskSnapshot).order_by(RiskSnapshot.timestamp.desc()).limit(days).all()
-    snapshots.reverse()  # Chronological order for charting
-
-    # ─── Shadow activity breakdown (for Trend Insights panel) ────────────────
-    shadows = db.query(ShadowPurchase).all()
-    all_txns = db.query(Transaction).all()
-    txn_map = {t.id: t for t in all_txns}
-
-    date_counts: dict = {}
-    vendor_counts: dict = {}
-    dept_counts: dict = {}
-
-    for s in shadows:
-        date_key = s.detected_at[:10] if (s.detected_at and len(s.detected_at) >= 10) else "unknown"
-        date_counts[date_key] = date_counts.get(date_key, 0) + 1
-        txn = txn_map.get(s.transaction_id)
-        if txn:
-            vendor_counts[txn.vendor] = vendor_counts.get(txn.vendor, 0) + 1
-            dept_counts[txn.department] = dept_counts.get(txn.department, 0) + 1
-
-    cutoff = (datetime.datetime.now() - datetime.timedelta(days=7)).strftime("%Y-%m-%d")
-    this_week = sum(1 for s in shadows if s.detected_at and s.detected_at[:10] >= cutoff)
-    # Compute true last-week count from dated shadow records instead of using random noise
-    last_week_start = (datetime.datetime.now() - datetime.timedelta(days=14)).strftime("%Y-%m-%d")
-    last_week_end   = (datetime.datetime.now() - datetime.timedelta(days=7)).strftime("%Y-%m-%d")
-    last_week_est = sum(1 for s in shadows if s.detected_at and last_week_start <= s.detected_at[:10] < last_week_end)
-    last_week_est = max(last_week_est, 1)  # avoid division by zero
-    week_change_pct = round(((this_week - last_week_est) / last_week_est) * 100, 1)
-    total_txn_count = len(all_txns) or 1
-
-    # Build daily shadow count and compliance rate arrays aligned to snapshot dates
-    snap_dates = [s.timestamp.split("T")[0] if "T" in (s.timestamp or "") else (s.timestamp or "")[:10] for s in snapshots]
-    shadow_counts_series   = [date_counts.get(d, 0) for d in snap_dates]
-    compliance_rates_series = [
-        round(max(0.0, min(100.0, (1.0 - (s.shadow_rate or 0)) * 100)), 1)
-        for s in snapshots
-    ]
-
-    return {
-        # Chart series
-        "dates":       snap_dates,
-        "exposure":    [s.total_exposure for s in snapshots],
-        "risk_scores": [s.avg_risk_score * 100 for s in snapshots],
-        "shadow_rates": [s.shadow_rate * 100 for s in snapshots],
-        # Aligned daily arrays for the YTD trend chart
-        "shadow_counts":    shadow_counts_series,
-        "compliance_rates": compliance_rates_series,
-        # Trend Insights panel
-        "total_shadow_purchases": len(shadows),
-        "shadow_rate": round(len(shadows) / total_txn_count * 100, 1),
-        "this_week_count": this_week,
-        "week_over_week_change_pct": week_change_pct,
-        "shadow_by_vendor": dict(sorted(vendor_counts.items(), key=lambda x: x[1], reverse=True)),
-        "shadow_by_department": dict(sorted(dept_counts.items(), key=lambda x: x[1], reverse=True)),
-        "shadow_by_date": dict(sorted(date_counts.items())),
-    }
-
-
-# ─── SIMULATOR CONTROL ──────────────────────────────────
-@app.post("/api/simulator/toggle")
-async def toggle_simulator_endpoint(user: str = Depends(get_current_user)):
-    global simulator_running
-    if simulator_running:
-        simulator_running = False; return {"status": "stopped"}
-    else:
-        simulator_running = True; asyncio.create_task(simulate_transactions())
-        return {"status": "started"}
-
-@app.post("/api/simulator/start")
-async def start_simulator(user: str = Depends(get_current_user)):
-    global simulator_running
-    if not simulator_running:
-        simulator_running = True; asyncio.create_task(simulate_transactions())
-    return {"status": "started"}
-
-@app.post("/api/simulator/stop")
-async def stop_simulator(user: str = Depends(get_current_user)):
-    global simulator_running; simulator_running = False
-    return {"status": "stopped"}
-
-DATASET_MODE = "mock"
-class SetModeRequest(BaseModel):
-    mode: str = "synthetic"
-
-    def model_post_init(self, __context):
-        if self.mode not in ("synthetic", "real"):
-            raise ValueError("mode must be 'synthetic' or 'real'")
-
-@app.post("/api/set-mode")
-async def set_mode_frontend(body: SetModeRequest, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Frontend-friendly mode toggle. Enhanced to activate real-world SF telemetry."""
-    global DATASET_MODE
-    if body.mode == "real":
-        DATASET_MODE = "production"
-        # Instead of just 3 records, pivot existing high-risk SF data to pending status
-        # and generate higher stakes scenarios
-        sf_depts = ["SFMTA", "PUC: Public Utilities Commission", "DPW: Public Works"]
-        sf_txns = db.query(Transaction).filter(Transaction.department.in_(sf_depts)).limit(10).all()
-        
-        for txn in sf_txns:
-            txn.is_shadow = True
-            txn.ai_risk_score = 0.8 + (random.random() * 0.15)
-            # Ensure shadow object exists
-            existing = db.query(ShadowPurchase).filter(ShadowPurchase.transaction_id == txn.id).first()
-            if not existing:
-                db.add(ShadowPurchase(
-                    transaction_id=txn.id,
-                    detected_at=datetime.date.today().isoformat(),
-                    reason="Flagged during Production Mode activation: High-Profile Dept Variance",
-                    risk_score=txn.ai_risk_score,
-                    status="Pending",
-                    item_category="Critical Ops"
-                ))
-        
-        db.commit()
-        run_detection(db)
-        _log_event(db, "MODE_CHANGE", "production", "Activated Enterprise Telemetry: SF Public Infrastructure Monitoring.")
-    else:
-        DATASET_MODE = "mock"
-        _log_event(db, "MODE_CHANGE", "mock", "Switched to Silicon Valley Synthetic Simulation.")
-    return {
-        "status": "success", 
-        "mode": body.mode,
-        "message": "Production telemetry protocols activated" if body.mode == "real" else "Mock data state restored"
-    }
-
-@app.get("/api/procurement/export-excel")
-def export_excel_report(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Enterprise Audit Log Excel Export with advanced structural formatting."""
-    wb = openpyxl.Workbook()
-    header_fill = PatternFill(start_color="1F2937", end_color="1F2937", fill_type="solid")
-    header_font = Font(color="FFFFFF", bold=True)
-    status_shadow_fill = PatternFill(start_color="FEE2E2", end_color="FEE2E2", fill_type="solid")
-    status_matched_fill = PatternFill(start_color="F0FDF4", end_color="F0FDF4", fill_type="solid")
-
-    border_side = Side(style='thin', color="D1D5DB")
-    std_border = Border(left=border_side, right=border_side, top=border_side, bottom=border_side)
-
-    # --- SHEET 1: LEDGER_SUMMARY ---
-    ws1 = wb.active; ws1.title = "Ledger_Summary"
-    ws1.merge_cells("A1:G1")
-    ws1["A1"] = "SHADOWSYNC ENTERPRISE AUDIT: TRANSACTION LEDGER"
-    ws1["A1"].font = Font(bold=True, size=14, color="1F2937")
-    ws1.merge_cells("A2:G2")
-    ws1["A2"] = f"Report Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    ws1["A2"].font = Font(italic=True, size=10, color="6B7280")
-    ws1.append([]); ws1.append(["TXN ID", "Vendor", "Amount (USD)", "Currency", "Status", "Risk Score", "Date"])
-    for cell in ws1[4]:
-        cell.fill, cell.font, cell.border = header_fill, header_font, std_border
-        cell.alignment = Alignment(horizontal="center")
-    
-    txns = db.query(Transaction).order_by(Transaction.date.desc()).limit(1500).all()
-    for t in txns:
-        status_label = "SHADOW" if t.is_shadow else "MATCHED"
-        ws1.append([t.id, t.vendor, t.amount, "USD", status_label, t.ai_risk_score or 0, t.date])
-        rn = ws1.max_row
-        
-        # Color Coding Status
-        sc = ws1.cell(rn, 5)
-        if t.is_shadow: 
-            sc.fill = status_shadow_fill
-            sc.font = Font(bold=True, color="991B1B")
-        else: 
-            sc.fill = status_matched_fill
-            sc.font = Font(bold=True, color="166534")
-        
-        ws1.cell(rn, 3).number_format = '"$"#,##0.00'
-        for col in range(1, 8): ws1.cell(rn, col).border = std_border
-
-    # --- SHEET 2: COMPLIANCE_AUDIT_LOG ---
-    ws2 = wb.create_sheet(title="Compliance_Audit_Log")
-    ws2.merge_cells("A1:E1")
-    ws2["A1"] = "AUDIT LOGS - COMPLIANCE TRACKING"
-    ws2["A1"].font = Font(bold=True, size=14)
-    ws2.append([f"Timestamp: {datetime.datetime.now().isoformat()}"])
-    ws2.append([])
-
-    log_headers = ["Timestamp", "Action", "Target", "Details", "User"]
-    ws2.append(log_headers)
-    log_header_idx = 4
-    for cell in ws2[log_header_idx]:
-        cell.fill, cell.font, cell.border = header_fill, header_font, std_border
-    
-    logs = db.query(AuditLog).order_by(AuditLog.timestamp.desc()).limit(1000).all()
-    for l in logs:
-        ws2.append([l.timestamp, l.action, l.target_id, l.details, l.user])
-        rn = ws2.max_row
-        if rn % 2 == 0:
-            for c in range(1, 6): ws2.cell(rn, c).fill = PatternFill(start_color="F9FAFB", end_color="F9FAFB", fill_type="solid")
-        for c in range(1, 6): ws2.cell(rn, c).border = std_border
-
-    # Optimization: Use fixed widths instead of O(C*R) auto-calculation
-    column_widths = {
-        'Ledger_Summary': [15, 25, 18, 12, 14, 12, 15],
-        'Compliance_Audit_Log': [25, 20, 15, 45, 15]
-    }
-    for sheet in wb.worksheets:
-        widths = column_widths.get(sheet.title, [20] * 10)
-        for i, width in enumerate(widths):
-            sheet.column_dimensions[get_column_letter(i+1)].width = width
-
-    out = io.BytesIO()
-    wb.save(out)
-    out.seek(0)
-    
-    _log_event(db, "EXPORT_EXCEL", "enterprise_report", f"User {user} exported Enterprise Audit report.")
-    return Response(
-        content=out.getvalue(),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="Nexus_Enterprise_Audit_{datetime.date.today()}.xlsx"'}
-    )
-
-
-@app.get("/api/pdf/dashboard-report")
-def pdf_dashboard_report(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Executive Summary Report with AI Reasoning."""
-    # Fetch real-time stats
-    total_txns = db.query(Transaction).count()
-    shadow_count = db.query(Transaction).filter(Transaction.is_shadow == True).count()
-    total_exposure = db.query(func.sum(Transaction.amount)).filter(Transaction.is_shadow == True).scalar() or 0.0
-    
-    # Calculate Risk Level
-    risk_rate = (shadow_count / max(total_txns, 1))
-    risk_level = "CRITICAL" if risk_rate > 0.15 else "HIGH" if risk_rate > 0.08 else "MEDIUM"
-    
-    stats = {
-        "exposure": f"${total_exposure:,.2f}",
-        "shadow_rate": f"{risk_rate*100:.1f}%",
-        "risk_level": risk_level,
-        "avg_confidence": 0.94 if DATASET_MODE == "production" else 0.88
-    }
-
-    # Fetch Top Risk Vendors
-    v_data = db.query(
-        Transaction.vendor,
-        func.count(Transaction.id),
-        func.sum(Transaction.amount)
-    ).filter(Transaction.is_shadow == True).group_by(Transaction.vendor).order_by(func.sum(Transaction.amount).desc()).limit(5).all()
-    
-    risk_vendors = [
-        {"name": v[0], "count": v[1], "amount": float(v[2] or 0), "top_reason": "High variance in payment profile."}
-        for v in v_data
-    ]
-
-    from pdf_generator import generate_dashboard_report_pdf
-    pdf_bytes = generate_dashboard_report_pdf(stats, risk_vendors=risk_vendors)
-    filename = generate_filename("executive_risk_summary", "pdf")
-    
-    _log_event(db, "PDF_EXPORT", "executive_summary", f"User {user} generated executive risk profile.")
-    
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "Access-Control-Expose-Headers": "Content-Disposition",
-            "Cache-Control": "no-cache, no-store, must-revalidate"
-        }
-    )
-
-
-# ===============================================
-# PRIORITY QUEUE ENGINE
-# ===============================================
-
-def calculate_priority_score(shadow, transaction, metric, frequency_map):
-    """
-    Priority Queue scoring formula:
-    priority_score = (risk_score * 0.35) + (normalized_estimated_loss * 0.25) + (frequency_score * 0.20) + ((1 - confidence_score) * 0.20)
-    """
-    risk_score = shadow.risk_score or 0.0
-    confidence_score = shadow.confidence_score or 1.0
-    estimated_loss = metric.estimated_loss if metric else 0.0
-
-    # Normalize estimated_loss to 0-1 scale (cap at $5000)
-    normalized_loss = min(estimated_loss / 5000.0, 1.0)
-
-    # Frequency from pre-calculated map
-    freq_key = (transaction.vendor, transaction.department) if transaction else (None, None)
-    frequency = frequency_map.get(freq_key, 1)
-
-    # Normalize frequency to 0-1 (cap at 10 occurrences)
-    frequency_score = min(frequency / 10.0, 1.0)
-
-    # Calculate priority score
-    priority_score = (
-        (risk_score * 0.35) +
-        (normalized_loss * 0.25) +
-        (frequency_score * 0.20) +
-        ((1.0 - confidence_score) * 0.20)
-    )
-
-    return round(priority_score, 4)
-
-
-def update_priority_scores(db: Session):
-    """Recalculate priority scores for all pending shadow purchases using optimized lookups."""
-    shadows = db.query(ShadowPurchase).filter(ShadowPurchase.status == "Pending").all()
-    if not shadows:
-        return 0
-
-    # Pre-fetch all necessary data in bulk
-    txn_ids = [s.transaction_id for s in shadows]
-    transactions = {t.id: t for t in db.query(Transaction).filter(Transaction.id.in_(txn_ids)).all()}
-    metrics = {m.transaction_id: m for m in db.query(RiskMetric).filter(RiskMetric.transaction_id.in_(txn_ids)).all()}
-
-    # Frequency map: (vendor, dept) -> count
-    freq_data = db.query(
-        Transaction.vendor, Transaction.department, func.count(Transaction.id)
-    ).filter(Transaction.is_shadow == True).group_by(Transaction.vendor, Transaction.department).all()
-    frequency_map = {(v, d): count for v, d, count in freq_data}
-
-    for shadow in shadows:
-        txn = transactions.get(shadow.transaction_id)
-        metric = metrics.get(shadow.transaction_id)
-        
-        score = calculate_priority_score(shadow, txn, metric, frequency_map)
-        shadow.priority_score = score
-        
-        # Persist metrics for faster GET later
-        shadow.risk_score = shadow.risk_score or 0.0
-        shadow.estimated_loss = metric.estimated_loss if metric else 0.0
-        
-        freq_key = (txn.vendor, txn.department) if txn else (None, None)
-        shadow.frequency = frequency_map.get(freq_key, 1)
-
-    db.commit()
-    return len(shadows)
-
-
-@app.get("/api/priority-queue")
-def get_priority_queue(limit: int = 10, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """
-    Get top priority-ranked shadow purchases.
-    Returns items sorted by priority_score (highest first).
-    """
-    # Update scores before returning
-    update_priority_scores(db)
-
-    shadows = db.query(ShadowPurchase).filter(
-        ShadowPurchase.status == "Pending"
-    ).order_by(ShadowPurchase.priority_score.desc()).limit(limit).all()
-
-    results = []
-    for s in shadows:
-        txn = db.query(Transaction).filter(Transaction.id == s.transaction_id).first()
-        metric = db.query(RiskMetric).filter(RiskMetric.transaction_id == s.transaction_id).first()
-
-        # Determine priority label for UI
-        priority_label = "Low"
-        if s.priority_score >= 0.7:
-            priority_label = "Critical"
-        elif s.priority_score >= 0.5:
-            priority_label = "High"
-        elif s.priority_score >= 0.3:
-            priority_label = "Medium"
-
-        results.append({
-            "id": s.id,
-            "transaction_id": s.transaction_id,
-            "date": txn.date if txn else s.detected_at,
-            "vendor": txn.vendor if txn else "Unknown",
-            "amount": txn.amount if txn else 0,
-            "description": txn.description if txn else s.reason,
-            "department": txn.department if txn else "Unknown",
-            "risk_score": s.risk_score,
-            "confidence_score": s.confidence_score,
-            "priority_score": s.priority_score,
-            "priority_label": priority_label,
-            "estimated_loss": s.estimated_loss or 0,
-            "frequency": s.frequency or 1,
-            "status": s.status,
-            "reason": s.reason,
-            "item_category": s.item_category or (metric.category if metric else "Medium")
-        })
-
-    return {
-        "items": results,
-        "total_count": db.query(ShadowPurchase).filter(ShadowPurchase.status == "Pending").count(),
-        "critical_count": len([r for r in results if r["priority_label"] == "Critical"]),
-        "high_count": len([r for r in results if r["priority_label"] == "High"])
-    }
-
-
-@app.post("/api/action")
-def log_action(body: dict, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """
-    Record analyst actions on shadow purchases.
-    Supported actions: convert_to_po, flag_vendor, mark_justified, escalate_audit
-    """
-    shadow_id = body.get("shadow_id")
-    action_type = body.get("action_type")
-    notes = body.get("notes", "")
-
-    shadow = db.query(ShadowPurchase).filter(ShadowPurchase.id == shadow_id).first()
-    if not shadow:
-        raise HTTPException(status_code=404, detail="Shadow purchase not found")
-
-    # Update shadow status based on action
-    if action_type == "convert_to_po" or action_type == "mark_justified":
-        shadow.status = "Resolved"
-        shadow.reason = f"Justified: {notes}" if action_type == "mark_justified" else shadow.reason
-        
-        # Integrate with Procurement Registry
-        txn = db.query(Transaction).filter(Transaction.id == shadow.transaction_id).first()
-        if txn:
-            po_id = f"PO-SHAD-{random.randint(1000, 9999)}"
-            vendor = db.query(Vendor).filter(Vendor.name == txn.vendor).first()
-            
-            new_po = Procurement(
-                id=po_id,
-                vendor_id=vendor.id if vendor else None,
-                vendor_name=txn.vendor,
-                item=txn.description,
-                amount=txn.amount,
-                quantity=1,
-                date=datetime.datetime.now().strftime("%Y-%m-%d"),
-                status="Approved",
-                department=txn.department,
-                source="ShadowIT-Resolved"
-            )
-            db.add(new_po)
-            shadow.resolved_po_id = po_id
-
-    elif action_type == "flag_vendor":
-        txn = db.query(Transaction).filter(Transaction.id == shadow.transaction_id).first()
-        vendor = db.query(Vendor).filter(Vendor.name == (txn.vendor if txn else "")).first()
-        if vendor:
-            vendor.risk_level = "High"
-            vendor.trust_score = max(10.0, vendor.trust_score - 15.0)
-    elif action_type == "escalate_audit":
-        shadow.status = "Escalated"
-
-    # Log action
-    log_entry = ActionLog(
-        shadow_id=shadow_id,
-        timestamp=datetime.datetime.now().isoformat(),
-        action_type=action_type,
-        user=user,
-        notes=notes,
-        resolved=shadow.status == "Resolved"
-    )
-    db.add(log_entry)
-
-    # Update audit log
-    _log_event(db, action_type.upper(), str(shadow_id), f"Action: {action_type}. Notes: {notes}")
-
-    db.commit()
-
-    return {"status": "success", "action": action_type, "shadow_id": shadow_id}
-
-
-@app.get("/api/action-queue")
-def get_action_queue(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Get recent actions for display in Action Center."""
-    actions = db.query(ActionLog).order_by(ActionLog.timestamp.desc()).limit(50).all()
-    return {
-        "actions": [{
-            "id": a.id,
-            "shadow_id": a.shadow_id,
-            "timestamp": a.timestamp,
-            "action_type": a.action_type,
-            "user": a.user,
-            "notes": a.notes,
-            "resolved": a.resolved
-        } for a in actions]
-    }
-
-
-@app.get("/api/history/{shadow_id}")
-def get_history(shadow_id: int, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Get full history for a shadow purchase: actions, feedback, risk changes."""
-    shadow = db.query(ShadowPurchase).filter(ShadowPurchase.id == shadow_id).first()
-    if not shadow:
-        raise HTTPException(status_code=404, detail="Shadow purchase not found")
-
-    actions = db.query(ActionLog).filter(ActionLog.shadow_id == shadow_id).order_by(ActionLog.timestamp).all()
-    feedbacks = db.query(UserFeedback).filter(UserFeedback.shadow_id == shadow_id).order_by(UserFeedback.submitted_at).all()
-
-    return {
-        "shadow_id": shadow_id,
-        "original_risk": shadow.risk_score,
-        "current_priority": shadow.priority_score,
-        "status": shadow.status,
-        "actions": [{"type": a.action_type, "timestamp": a.timestamp, "user": a.user, "notes": a.notes} for a in actions],
-        "feedbacks": [{"type": f.feedback_type, "notes": f.notes, "submitted_at": f.submitted_at, "corrected_risk": f.corrected_risk} for f in feedbacks],
-        "total_actions": len(actions),
-        "total_feedbacks": len(feedbacks)
-    }
-
-
-@app.get("/api/simulation/{transaction_id}")
-def run_what_if_simulation(transaction_id: str, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """
-    Light what-if simulation: project risk trend if action is not taken.
-    """
-    shadow = db.query(ShadowPurchase).filter(
-        ShadowPurchase.transaction_id == transaction_id
+async def download_po_pdf(po_id: str, db: Session = Depends(get_db)):
+    """Generate and stream a professional Purchase Order PDF."""
+    po = db.query(Procurement).filter(
+        (Procurement.po_number == po_id) | (Procurement.id == po_id)
     ).first()
-    if not shadow:
-        raise HTTPException(status_code=404, detail="Shadow transaction not found")
+    if not po and po_id.startswith("PO-2026-"):
+        po = db.query(Procurement).filter(
+            Procurement.po_number == po_id.replace("PO-2026-", "ANI-PO-2026-0")
+        ).first()
+    if not po:
+        raise HTTPException(status_code=404, detail="Purchase Order not found")
 
-    # Get similar historical items for trend factor
-    txn = db.query(Transaction).filter(Transaction.id == transaction_id).first()
-    if not txn:
-        raise HTTPException(status_code=404, detail="Transaction not found")
+    po_data = {
+        "id": po.po_number or str(po.id),
+        "date": po.date,
+        "vendor_name": po.vendor_name,
+        "vendor_id": po.vendor_id,
+        "item": po.item,
+        "quantity": po.quantity,
+        "amount": po.amount,
+        "department": po.department
+    }
+    pdf_bytes = generate_document_pdf(po_data, document_type="po")
+    filename = f"Anishka_PO_{po.po_number or po.id}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
 
-    similar_shadows = db.query(ShadowPurchase).filter(
-        ShadowPurchase.transaction_id != transaction_id,
-        ShadowPurchase.status.in_(["Resolved", "Escalated"])
+
+# ─── Suppliers / Vendors API ──────────────────────────────────────────
+
+def _supplier_to_dict(s: Vendor, db: Session) -> dict:
+    open_pos = db.query(Procurement).filter(
+        Procurement.supplier_id == s.id,
+        Procurement.status.in_(["DRAFT", "APPROVED"])
     ).all()
-
-    # Calculate average trend factor from historical data
-    trend_factors = []
-    for s in similar_shadows:
-        if s.risk_score and s.risk_score > 0:
-            trend_factors.append(s.risk_score / max(s.confidence_score, 0.1))
-
-    avg_trend = sum(trend_factors) / len(trend_factors) if trend_factors else 1.5
-
-    # Project risk increases over 7, 14, 30 days
-    current_risk = shadow.risk_score or 0.3
-    project_7d = min(current_risk * (avg_trend ** (7/30)), 1.0)
-    project_14d = min(current_risk * (avg_trend ** (14/30)), 1.0)
-    project_30d = min(current_risk * (avg_trend ** (30/30)), 1.0)
-
-    # Project financial impact
-    metric = db.query(RiskMetric).filter(RiskMetric.transaction_id == transaction_id).first()
-    current_loss = metric.estimated_loss if metric else 0
-    project_loss_7d = round(current_loss * (avg_trend ** (7/30)), 2)
-    project_loss_30d = round(current_loss * (avg_trend ** (30/30)), 2)
+    open_count = len(open_pos)
+    open_val = round(sum(p.total_value or 0.0 for p in open_pos), 2)
 
     return {
-        "transaction_id": transaction_id,
-        "current_risk_score": current_risk,
-        "current_estimated_loss": current_loss,
-        "trend_factor": round(avg_trend, 2),
-        "projected_risk_7d": round(project_7d, 4),
-        "projected_risk_14d": round(project_14d, 4),
-        "projected_risk_30d": round(project_30d, 4),
-        "projected_loss_7d": project_loss_7d,
-        "projected_loss_30d": project_loss_30d,
-        "recommendation": "Immediate action required" if project_7d > 0.6 else "Monitor closely" if project_7d > 0.4 else "Low urgency"
+        "id": s.id,
+        "name": s.name,
+        "contact_person": s.contact_person or "Sales Manager",
+        "phone": s.phone or s.contact_phone,
+        "city": s.city or "Delhi-NCR",
+        "lead_time_days": s.lead_time_days or 3,
+        "rating": s.rating or 4.5,
+        "category": s.category,
+        "risk_level": s.risk_level,
+        "approved": s.approved,
+        "avg_order": s.avg_order,
+        "trust_score": s.trust_score,
+        "contact_email": s.contact_email,
+        "contact_phone": s.contact_phone,
+        "open_po_count": open_count,
+        "open_po_value": open_val
+    }
+
+@app.get("/api/vendors")
+@app.get("/api/suppliers")
+async def get_suppliers(db: Session = Depends(get_db)):
+    """Return all approved welding suppliers and OEMs with open PO counts and values."""
+    suppliers = db.query(Vendor).all()
+    return [_supplier_to_dict(s, db) for s in suppliers]
+
+@app.post("/api/vendors")
+@app.post("/api/suppliers")
+async def create_supplier(
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Register a new supplier or distributor (admin or manager only)."""
+    s_id = payload.get("id") or f"V{db.query(Vendor).count() + 1:03d}"
+    supplier = Vendor(
+        id=s_id,
+        name=payload["name"],
+        contact_person=payload.get("contact_person", "Sales Manager"),
+        phone=payload.get("phone", "+91 124 400 0000"),
+        city=payload.get("city", "Delhi-NCR"),
+        lead_time_days=int(payload.get("lead_time_days", 3)),
+        rating=float(payload.get("rating", 4.5)),
+        category=payload.get("category", "Welding Supplies"),
+        approved=payload.get("approved", True),
+        avg_order=float(payload.get("avg_order", 0)),
+        contact_email=payload.get("contact_email", "sales@supplier.com")
+    )
+    db.add(supplier)
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="SUPPLIER_ADDED",
+        user=current_user["username"],
+        target_id=s_id,
+        details=f"Registered supplier {payload['name']} ({supplier.city})."
+    ))
+    db.commit()
+    return {"status": "success", "id": s_id, "name": payload["name"]}
+
+@app.put("/api/vendors/{vendor_id}")
+@app.put("/api/suppliers/{vendor_id}")
+async def update_supplier(
+    vendor_id: str,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Update supplier details (admin or manager only)."""
+    supplier = db.query(Vendor).filter(Vendor.id == vendor_id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier not found.")
+
+    if "name" in payload:
+        supplier.name = payload["name"]
+    if "contact_person" in payload:
+        supplier.contact_person = payload["contact_person"]
+    if "phone" in payload:
+        supplier.phone = payload["phone"]
+    if "city" in payload:
+        supplier.city = payload["city"]
+    if "lead_time_days" in payload:
+        supplier.lead_time_days = int(payload["lead_time_days"])
+    if "rating" in payload:
+        supplier.rating = float(payload["rating"])
+    if "category" in payload:
+        supplier.category = payload["category"]
+    if "contact_email" in payload:
+        supplier.contact_email = payload["contact_email"]
+
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="SUPPLIER_UPDATED",
+        user=current_user["username"],
+        target_id=supplier.id,
+        details=f"Updated supplier record for {supplier.name}."
+    ))
+    db.commit()
+    return {"status": "success", "supplier": _supplier_to_dict(supplier, db)}
+
+
+# ─── Low-Stock Replenishment Reports & Export Engine ──────────────────
+
+@app.get("/api/export/low-stock/pdf")
+async def export_low_stock_pdf(db: Session = Depends(get_db)):
+    """Generate low-stock replenishment alert report PDF."""
+    items = db.query(Inventory).filter(Inventory.is_active == True).all()
+    status_map = compute_items_status_map(items, db)
+    low_stock_items = [
+        {
+            "sku": i.sku,
+            "name": i.name,
+            "category": i.category,
+            "quantity": i.quantity,
+            "reorder_level": i.reorder_level,
+            "reorder_qty": i.reorder_qty,
+            "status": status_map.get(i.id, "LOW")
+        }
+        for i in items
+        if status_map.get(i.id) in ("LOW", "CRITICAL", "OUT")
+    ]
+    stats = _compute_stats(db)
+    pdf_bytes = generate_low_stock_report_pdf(stats, low_stock_items)
+    filename = f"Anishka_Low_Stock_{datetime.date.today().isoformat()}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
+
+@app.get("/api/export/low-stock/excel")
+async def export_low_stock_excel(db: Session = Depends(get_db)):
+    """Generate low-stock replenishment report Excel."""
+    items = db.query(Inventory).filter(Inventory.is_active == True).all()
+    status_map = compute_items_status_map(items, db)
+    low_items = [i for i in items if status_map.get(i.id) in ("LOW", "CRITICAL", "OUT")]
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Low Stock Spares"
+
+    header_fill = PatternFill(start_color="00234B", end_color="00234B", fill_type="solid")
+    header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+
+    headers = ["SKU", "Part Name", "Category", "On Hand Qty", "Reorder Level", "Suggested Order Qty", "Status", "Supplier"]
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    for row_idx, i in enumerate(low_items, start=2):
+        s = status_map.get(i.id, "LOW")
+        supp_name = i.supplier.name if i.supplier else "Authorized OEM"
+        ws.append([i.sku, i.name, i.category, i.quantity, i.reorder_level, i.reorder_qty or 50, s, supp_name])
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    filename = f"Anishka_Low_Stock_{datetime.date.today().isoformat()}.xlsx"
+    return Response(
+        content=output.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
+
+@app.get("/api/export/low-stock/csv")
+async def export_low_stock_csv(db: Session = Depends(get_db)):
+    """Generate low-stock replenishment report CSV."""
+    items = db.query(Inventory).filter(Inventory.is_active == True).all()
+    status_map = compute_items_status_map(items, db)
+    low_items = [i for i in items if status_map.get(i.id) in ("LOW", "CRITICAL", "OUT")]
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["SKU", "Part Name", "Category", "On Hand Qty", "Reorder Level", "Suggested Order Qty", "Status", "Supplier"])
+    for i in low_items:
+        s = status_map.get(i.id, "LOW")
+        supp_name = i.supplier.name if i.supplier else "Authorized OEM"
+        writer.writerow([i.sku, i.name, i.category, i.quantity, i.reorder_level, i.reorder_qty or 50, s, supp_name])
+
+    output.seek(0)
+    filename = f"Anishka_Low_Stock_{datetime.date.today().isoformat()}.csv"
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
+
+
+# ─── Bulk CSV Import & Template ──────────────────────────────────────
+
+@app.get("/api/import/sample")
+async def get_import_sample_template():
+    """Download sample CSV template for bulk welding spares catalog import."""
+    sample_csv = (
+        "sku,name,category,unit,compatible_with,location,quantity,reorder_level,reorder_qty,unit_cost,selling_price,supplier_id\r\n"
+        "CT-M8-12,M8 Contact Tip 1.2mm CuCrZr,MIG Welding,pcs,Binzel MB 36KD/501D,R1-B01,500,100,500,32.0,55.0,V001\r\n"
+        "NZ-501D-CON,Conical Nozzle NW 16mm 501D,MIG Welding,pcs,Binzel MB 501D,R1-B03,120,40,100,145.0,220.0,V001\r\n"
+        "DF-36KD-CER,Gas Diffuser Ceramic Standard,MIG Welding,pcs,Binzel MB 36KD,R1-B05,250,50,200,48.0,85.0,V001\r\n"
+        "TE-WL20-24,Lanthanated Tungsten 2.4mm Blue,TIG Welding,pcs,WP-17/18/26 Torches,R2-B02,80,25,50,95.0,160.0,V002\r\n"
+    )
+    return Response(
+        content=sample_csv,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="Anishka_Spares_Import_Template.csv"'}
+    )
+
+@app.post("/api/import/csv")
+async def import_csv_catalog(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Import inventory catalog items from CSV with row-by-row error validation."""
+    body = await request.body()
+    content_str = body.decode("utf-8", errors="replace")
+
+    # If multipart, extract file content
+    if "WebKitFormBoundary" in content_str or "form-data;" in content_str:
+        lines = content_str.splitlines()
+        csv_lines = []
+        capture = False
+        for l in lines:
+            if capture:
+                if l.startswith("------"):
+                    break
+                csv_lines.append(l)
+            elif l == "":
+                capture = True
+        content_str = "\n".join(csv_lines)
+
+    f = io.StringIO(content_str)
+    reader = csv.DictReader(f)
+
+    if not reader.fieldnames:
+        raise HTTPException(status_code=400, detail="CSV file is empty or missing headers.")
+
+    # Validate header fields
+    req_cols = {"sku", "name", "category"}
+    actual_cols = {col.strip().lower() for col in reader.fieldnames if col}
+    if not req_cols.issubset(actual_cols):
+        raise HTTPException(status_code=400, detail=f"CSV missing required columns: {req_cols - actual_cols}")
+
+    total_rows = 0
+    imported_count = 0
+    imported_item_ids = []
+    errors = []
+    seen_skus_in_batch = set()
+
+    for idx, row in enumerate(reader, start=2): # row 1 is header
+        total_rows += 1
+        sku = (row.get("sku") or row.get("SKU") or "").strip()
+        name = (row.get("name") or row.get("Name") or "").strip()
+        category = (row.get("category") or row.get("Category") or "").strip()
+
+        if not sku:
+            errors.append({"row": idx, "sku": "", "error": "Missing required SKU."})
+            continue
+        if not name:
+            errors.append({"row": idx, "sku": sku, "error": "Missing required item name."})
+            continue
+        if not category:
+            errors.append({"row": idx, "sku": sku, "error": "Missing required category."})
+            continue
+
+        if sku in seen_skus_in_batch:
+            errors.append({"row": idx, "sku": sku, "error": f"Duplicate SKU '{sku}' within CSV file."})
+            continue
+        seen_skus_in_batch.add(sku)
+
+        # Parse numeric fields safely
+        try:
+            qty = int(row.get("quantity") or 0)
+            reorder_lvl = int(row.get("reorder_level") or 10)
+            reorder_q = int(row.get("reorder_qty") or 50)
+            unit_c = float(row.get("unit_cost") or 0.0)
+            selling_p = float(row.get("selling_price") or (unit_c * 1.4 if unit_c > 0 else 0.0))
+        except (ValueError, TypeError) as e:
+            errors.append({"row": idx, "sku": sku, "error": f"Invalid numeric field value: {e}"})
+            continue
+
+        unit_val = (row.get("unit") or "pcs").strip()
+        compatible_val = (row.get("compatible_with") or "").strip()
+        location_val = (row.get("location") or "R1-B01").strip()
+        supplier_id_val = (row.get("supplier_id") or "").strip()
+        if supplier_id_val:
+            sup = db.query(Vendor).filter(Vendor.id == supplier_id_val).first()
+            if not sup:
+                errors.append({"row": idx, "sku": sku, "error": f"Supplier '{supplier_id_val}' does not exist in suppliers database."})
+                continue
+        else:
+            supplier_id_val = None
+
+        existing = db.query(Inventory).filter(Inventory.sku == sku).first()
+        if existing:
+            existing.name = name
+            existing.category = category
+            existing.unit = unit_val
+            existing.compatible_with = compatible_val
+            existing.location = location_val
+            existing.quantity = qty
+            existing.reorder_level = reorder_lvl
+            existing.reorder_qty = reorder_q
+            existing.unit_cost = unit_c
+            existing.selling_price = selling_p
+            existing.supplier_id = supplier_id_val
+            existing.last_updated = datetime.datetime.now().isoformat()
+            existing.is_active = True
+        else:
+            item = Inventory(
+                sku=sku,
+                name=name,
+                category=category,
+                unit=unit_val,
+                compatible_with=compatible_val,
+                location=location_val,
+                quantity=qty,
+                reorder_level=reorder_lvl,
+                reorder_qty=reorder_q,
+                unit_cost=unit_c,
+                selling_price=selling_p,
+                supplier_id=supplier_id_val,
+                last_updated=datetime.datetime.now().isoformat(),
+                is_active=True
+            )
+            db.add(item)
+        imported_count += 1
+        db.flush()
+        target_id = existing.id if existing else item.id
+        if target_id:
+            imported_item_ids.append(target_id)
+
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="CATALOG_IMPORTED",
+        user=current_user["username"],
+        target_id="BULK_IMPORT",
+        details=f"Processed CSV: {imported_count} imported/updated, {len(errors)} errors out of {total_rows} rows."
+    ))
+    db.commit()
+
+    # Requirement C: Event trigger after CSV import for every imported row
+    await trigger_replenishment_events(imported_item_ids, db, user=current_user["username"])
+
+    stats = _compute_stats(db)
+    await manager.broadcast({"type": "stats_update", "data": stats})
+
+    return {
+        "status": "completed",
+        "total_rows": total_rows,
+        "imported": imported_count,
+        "errors": errors
     }
 
 
-# ===============================================
-# ROOT CAUSE ANALYSIS ENGINE
-# ===============================================
+# ─── Standard CSV Export Engine ───────────────────────────────────────
 
-@app.get("/api/root-cause")
-def get_root_cause_analysis(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """
-    Identify why shadow procurement is happening.
-    Group by vendor, department, item category to find dominant clusters.
-    """
-    shadows = db.query(ShadowPurchase).all()
+@app.get("/api/export/csv/{export_type}")
+@app.get("/api/export/{export_type}")
+async def export_csv(export_type: str, db: Session = Depends(get_db)):
+    """Export catalog, movements, suppliers, or audit logs to CSV."""
+    output = io.StringIO()
+    writer = csv.writer(output)
 
-    # Group by vendor
-    vendor_counts = {}
-    vendor_amounts = {}
-    dept_counts = {}
-    category_counts = {}
+    if export_type in ["inventory", "stock"]:
+        items = db.query(Inventory).all()
+        writer.writerow(["SKU", "Name", "Category", "Quantity", "Unit Price (INR)", "Reorder Level", "Location", "Last Updated"])
+        for i in items:
+            writer.writerow([i.sku, i.name, i.category, i.quantity, i.unit_price, i.reorder_level, i.location, i.last_updated])
+        filename = "Anishka_Inventory_Catalog.csv"
 
-    total_amount = 0
-    for s in shadows:
-        txn = db.query(Transaction).filter(Transaction.id == s.transaction_id).first()
-        if txn:
-            vendor_counts[txn.vendor] = vendor_counts.get(txn.vendor, 0) + 1
-            vendor_amounts[txn.vendor] = vendor_amounts.get(txn.vendor, 0.0) + (txn.amount or 0)
-            dept_counts[txn.department] = dept_counts.get(txn.department, 0) + 1
-            total_amount += txn.amount or 0
+    elif export_type in ["movements", "transactions"]:
+        movements = db.query(StockMovement).order_by(StockMovement.id.desc()).all()
+        writer.writerow(["Movement ID", "Timestamp", "Type", "SKU", "Item Name", "Quantity", "Reference", "Destination/Source", "Operator", "Notes"])
+        for m in movements:
+            writer.writerow([m.movement_id, m.timestamp, m.movement_type, m.sku, m.item_name, m.quantity, m.reference, m.destination_or_source, m.operator, m.notes])
+        filename = "Anishka_Stock_Movements.csv"
 
-        if s.item_category:
-            category_counts[s.item_category] = category_counts.get(s.item_category, 0) + 1
+    elif export_type in ["procurement", "pos"]:
+        pos = db.query(Procurement).all()
+        writer.writerow(["PO Number", "Date", "Supplier", "Item", "Quantity", "Amount (INR)", "Status", "Department"])
+        for p in pos:
+            writer.writerow([p.id, p.date, p.vendor_name, p.item, p.quantity, p.amount, p.status, p.department])
+        filename = "Anishka_Purchase_Orders.csv"
 
-    total_shadows = max(len(shadows), 1)
+    elif export_type in ["suppliers", "vendors"]:
+        suppliers = db.query(Vendor).all()
+        writer.writerow(["Supplier ID", "Supplier Name", "Category", "Reliability", "Trust Score", "Contact Email", "Contact Phone"])
+        for s in suppliers:
+            writer.writerow([s.id, s.name, s.category, s.risk_level, s.trust_score, s.contact_email, s.contact_phone])
+        filename = "Anishka_Suppliers_Directory.csv"
 
-    # Find primary source
-    primary_vendor = max(vendor_counts, key=vendor_counts.get) if vendor_counts else "N/A"
-    primary_vendor_pct = round((vendor_counts.get(primary_vendor, 0) / total_shadows) * 100, 1) if primary_vendor != "N/A" else 0
+    elif export_type in ["audit", "logs"]:
+        logs = db.query(AuditLog).order_by(AuditLog.id.desc()).all()
+        writer.writerow(["Timestamp", "User", "Action", "Target ID", "Details"])
+        for l in logs:
+            writer.writerow([l.timestamp, l.user, l.action, l.target_id, l.details])
+        filename = "Anishka_Audit_Trail.csv"
 
-    primary_dept = max(dept_counts, key=dept_counts.get) if dept_counts else "N/A"
-    primary_dept_pct = round((dept_counts.get(primary_dept, 0) / total_shadows) * 100, 1) if primary_dept != "N/A" else 0
+    else:
+        raise HTTPException(status_code=400, detail="Invalid export type.")
 
-    primary_category = max(category_counts, key=category_counts.get) if category_counts else "N/A"
-    primary_category_pct = round((category_counts.get(primary_category, 0) / total_shadows) * 100, 1) if primary_category != "N/A" else 0
+    output.seek(0)
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
 
-    return {
-        "total_shadows": total_shadows,
-        "primary_source": {
-            "vendor": primary_vendor,
-            "percentage": primary_vendor_pct,
-            "count": vendor_counts.get(primary_vendor, 0),
-            "total_amount": round(vendor_amounts.get(primary_vendor, 0), 2)
-        },
-        "primary_department": {
-            "name": primary_dept,
-            "percentage": primary_dept_pct,
-            "count": dept_counts.get(primary_dept, 0)
-        },
-        "primary_category": {
-            "name": primary_category,
-            "percentage": primary_category_pct,
-            "count": category_counts.get(primary_category, 0)
-        },
-        "vendor_breakdown": [{"vendor": k, "count": v, "amount": round(vendor_amounts.get(k, 0), 2)} for k, v in sorted(vendor_counts.items(), key=lambda x: x[1], reverse=True)],
-        "department_breakdown": [{"department": k, "count": v} for k, v in sorted(dept_counts.items(), key=lambda x: x[1], reverse=True)],
-        "category_breakdown": [{"category": k, "count": v} for k, v in sorted(category_counts.items(), key=lambda x: x[1], reverse=True)]
-    }
+@app.get("/api/export/excel/{export_type}")
+@app.get("/api/export/comprehensive")
+async def export_excel(export_type: str = "comprehensive", db: Session = Depends(get_db)):
+    """Generate a multi-tab professional Excel audit workbook."""
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)  # Remove default blank sheet
+
+    # Colors
+    header_fill = PatternFill(start_color="00234B", end_color="00234B", fill_type="solid")
+    header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    thin_border = Border(
+        left=Side(style='thin', color='D1D5DB'),
+        right=Side(style='thin', color='D1D5DB'),
+        top=Side(style='thin', color='D1D5DB'),
+        bottom=Side(style='thin', color='D1D5DB')
+    )
+
+    # Sheet 1: Inventory Catalog
+    ws1 = wb.create_sheet(title="Inventory Catalog")
+    ws1.append(["SKU", "Item Description", "Category", "In-Stock Qty", "Unit Price (INR)", "Total Value (INR)", "Reorder Level", "Location", "Status"])
+    for cell in ws1[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    items = db.query(Inventory).order_by(Inventory.category, Inventory.name).all()
+    for row_idx, item in enumerate(items, start=2):
+        val = item.quantity * item.unit_price
+        status_text = "Out of Stock" if item.quantity == 0 else ("Low Stock" if item.quantity <= item.reorder_level else "In Stock")
+        ws1.append([item.sku, item.name, item.category, item.quantity, item.unit_price, val, item.reorder_level, item.location, status_text])
+        for col in range(1, 10):
+            ws1.cell(row=row_idx, column=col).border = thin_border
+
+    # Sheet 2: Stock Movements Ledger
+    ws2 = wb.create_sheet(title="Stock Movements")
+    ws2.append(["Movement ID", "Timestamp", "Type", "SKU", "Item Name", "Quantity", "Reference", "Destination / Source", "Operator"])
+    for cell in ws2[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    movements = db.query(StockMovement).order_by(StockMovement.id.desc()).all()
+    for row_idx, m in enumerate(movements, start=2):
+        ws2.append([m.movement_id, m.timestamp, m.movement_type, m.sku, m.item_name, m.quantity, m.reference, m.destination_or_source, m.operator])
+        for col in range(1, 10):
+            ws2.cell(row=row_idx, column=col).border = thin_border
+
+    # Sheet 3: Purchase Orders
+    ws3 = wb.create_sheet(title="Purchase Orders")
+    ws3.append(["PO Number", "Date", "Supplier", "Item", "Quantity", "Amount (INR)", "Status", "Department"])
+    for cell in ws3[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    pos = db.query(Procurement).all()
+    for row_idx, p in enumerate(pos, start=2):
+        ws3.append([p.id, p.date, p.vendor_name, p.item, p.quantity, p.amount, p.status, p.department])
+        for col in range(1, 9):
+            ws3.cell(row=row_idx, column=col).border = thin_border
+
+    # Sheet 4: Suppliers
+    ws4 = wb.create_sheet(title="Suppliers")
+    ws4.append(["Supplier ID", "Supplier Name", "Category", "Reliability", "Trust Rating", "Email", "Phone"])
+    for cell in ws4[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    suppliers = db.query(Vendor).all()
+    for row_idx, s in enumerate(suppliers, start=2):
+        ws4.append([s.id, s.name, s.category, s.risk_level, f"{s.trust_score}%", s.contact_email, s.contact_phone])
+        for col in range(1, 8):
+            ws4.cell(row=row_idx, column=col).border = thin_border
+
+    # Auto-adjust column widths
+    for sheet in [ws1, ws2, ws3, ws4]:
+        for col in sheet.columns:
+            max_len = max(len(str(cell.value or '')) for cell in col)
+            col_letter = get_column_letter(col[0].column)
+            sheet.column_dimensions[col_letter].width = max(max_len + 3, 12)
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    filename = f"Anishka_Inventory_Workbook_{datetime.date.today().isoformat()}.xlsx"
+    return Response(
+        content=output.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
 
 
-@app.post("/api/seed-behavior")
-def seed_behavior(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Direct seed for demo behavior patterns."""
-    if not db.query(BehaviorMetric).first():
-        db.add(BehaviorMetric(employee_id="James R.", department="Maintenance", shadow_count=14, risk_level="High"))
-        db.add(BehaviorMetric(employee_id="Sarah L.", department="Production", shadow_count=4, risk_level="Low"))
-        db.add(BehaviorMetric(employee_id="Robert M.", department="Engineering", shadow_count=8, risk_level="Medium"))
-        db.commit()
-    return {"status": "seeded"}
-
-# ===============================================
-# AI COPILOT ENDPOINTS (Groq + Cohere)
-# ===============================================
-
-class AIChatRequest(BaseModel):
-    message: str = Field(..., min_length=1, max_length=2000)
-    context: Optional[dict] = None
-    history: Optional[list] = None
+# ─── Groq AI Copilot API ──────────────────────────────────────────────
 
 @app.post("/api/ai/chat")
 @limiter.limit("20/minute")
-def ai_chat(request: Request, body: AIChatRequest, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Chat with Nexus AI Copilot powered by Groq."""
-    # Auto-attach system context
-    context = body.context or {}
-    if "stats" not in context:
-        context["stats"] = _get_stats_dict(db)
-    context["vendor_count"] = db.query(Vendor).count()
-    context["high_risk_vendors"] = db.query(Vendor).filter(Vendor.risk_level == "High").count()
+async def ai_chat_endpoint(
+    request: Request,
+    req: AIChatRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Conversational AI Copilot agent with tool calling and SSE streaming."""
+    user = current_user.get("username", "storekeeper")
+    role = current_user.get("role", "storekeeper")
 
-    result = chat_with_groq(body.message, context=context, conversation_history=body.history)
-    _log_event(db, "AI_CHAT", None, f"User {user} asked: {body.message[:100]}...")
-    return result
-
-
-@app.get("/api/ai/analyze/{shadow_id}")
-@limiter.limit("30/minute")
-def ai_analyze_shadow(request: Request, shadow_id: int, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Deep AI analysis of a shadow purchase using Groq."""
-    shadow = db.query(ShadowPurchase).filter(ShadowPurchase.id == shadow_id).first()
-    if not shadow:
-        raise HTTPException(status_code=404, detail="Shadow purchase not found")
-
-    txn = db.query(Transaction).filter(Transaction.id == shadow.transaction_id).first()
-
-    shadow_data = {
-        "risk_score": shadow.risk_score,
-        "confidence_score": shadow.confidence_score,
-        "item_category": shadow.item_category,
-        "reason": shadow.reason,
-        "status": shadow.status,
-    }
-    txn_data = {
-        "vendor": txn.vendor if txn else "Unknown",
-        "amount": txn.amount if txn else 0,
-        "department": txn.department if txn else "Unknown",
-        "payment_type": txn.payment_type if txn else "Unknown",
-        "description": txn.description if txn else "N/A",
-    }
-
-    result = analyze_shadow_with_groq(shadow_data, txn_data)
-    _log_event(db, "AI_DEEP_ANALYSIS", str(shadow_id), f"User {user} requested deep AI analysis.")
-    return result
-
-
-@app.get("/api/ai/summarize")
-@limiter.limit("10/minute")
-def ai_summarize_risks(request: Request, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Generate executive risk summary using Cohere."""
-    shadows = db.query(ShadowPurchase).filter(ShadowPurchase.status == "Pending").all()
-    shadows_data = []
-    for s in shadows:
-        txn = db.query(Transaction).filter(Transaction.id == s.transaction_id).first()
-        shadows_data.append({
-            "vendor": txn.vendor if txn else "Unknown",
-            "amount": txn.amount if txn else 0,
-            "risk_score": s.risk_score or 0,
-            "item_category": s.item_category or "General",
-            "reason": s.reason or "N/A",
-            "department": txn.department if txn else "Unknown",
-        })
-
-    result = summarize_risks_with_cohere(shadows_data)
-    _log_event(db, "AI_RISK_SUMMARY", None, f"User {user} generated AI risk summary.")
-    return result
-
-
-@app.get("/api/ai/vendor-insight/{vendor_name}")
-def ai_vendor_insight(vendor_name: str, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """AI-powered vendor risk insight using Cohere."""
-    vendor = db.query(Vendor).filter(Vendor.name == vendor_name).first()
-    if not vendor:
-        raise HTTPException(status_code=404, detail=f"Vendor '{vendor_name}' not found")
-
-    shadow_count = db.query(ShadowPurchase).join(
-        Transaction, ShadowPurchase.transaction_id == Transaction.id
-    ).filter(Transaction.vendor == vendor_name).count()
-    total_spend = sum(
-        t.amount for t in db.query(Transaction).filter(Transaction.vendor == vendor_name).all()
-    )
-
-    vendor_data = {
-        "name": vendor.name,
-        "risk_level": vendor.risk_level,
-        "trust_score": vendor.trust_score,
-        "shadow_count": shadow_count,
-        "total_spend": total_spend,
-        "approved": vendor.approved,
-    }
-
-    result = generate_vendor_insight_with_cohere(vendor_data)
-    return result
-
+    accept_hdr = request.headers.get("Accept", "")
+    if req.stream or "text/event-stream" in accept_hdr:
+        from fastapi.responses import StreamingResponse
+        gen = stream_chat_agent(
+            user_message=req.message,
+            db=db,
+            user=user,
+            role=role,
+            conversation_history=req.conversation_history,
+            session_id=req.session_id
+        )
+        return StreamingResponse(
+            gen,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"
+            }
+        )
+    else:
+        result = run_chat_agent(
+            user_message=req.message,
+            db=db,
+            user=user,
+            role=role,
+            conversation_history=req.conversation_history,
+            session_id=req.session_id
+        )
+        return result
 
 @app.get("/api/ai/health")
-def ai_health_check(user: str = Depends(get_current_user)):
-    """Check AI provider connectivity."""
+async def ai_health():
+    """Verify Groq API connectivity and models."""
     return check_ai_health()
 
-
-# ─── PREVENTIVE INTELLIGENCE LAYER ────────────────────────
-
-class PreventiveCheckRequest(BaseModel):
-    part_name: str
-    department: str = "Unknown"
-
-@app.get("/api/preventive/search")
-def search_inventory(q: str, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    if not q:
-        return []
-    items = db.query(Inventory).filter(Inventory.name.ilike(f"%{q}%")).all()
-    return [{"id": i.id, "name": i.name, "sku": i.sku, "quantity": i.quantity} for i in items]
-
-@app.post("/api/preventive/check")
-def preventive_check(req: PreventiveCheckRequest, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    # 1. Smart Part Matching & Inventory Check
-    item = db.query(Inventory).filter(Inventory.name.ilike(f"%{req.part_name}%")).first()
+@app.get("/api/ai/usage")
+async def ai_usage_stats(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    """Return AI token usage statistics from AIChatLog."""
+    logs = db.query(AIChatLog).all()
+    total_requests = len(logs)
+    total_tokens = sum(l.total_tokens or 0 for l in logs)
+    prompt_tokens = sum(l.prompt_tokens or 0 for l in logs)
+    comp_tokens = sum(l.completion_tokens or 0 for l in logs)
     
-    # 2. Inventory Confidence Engine
-    confidence = 50.0
-    if item:
-        inv_conf = db.query(InventoryConfidence).filter(InventoryConfidence.item_id == item.id).first()
-        if inv_conf:
-            confidence = inv_conf.confidence_score
-        else:
-            # Default or generate on the fly
-            confidence = 85.0 if item.quantity > 0 else 20.0
-            db.add(InventoryConfidence(item_id=item.id, confidence_score=confidence))
-            db.commit()
+    by_user = {}
+    by_model = {}
+    for l in logs:
+        by_user[l.user] = by_user.get(l.user, 0) + (l.total_tokens or 0)
+        by_model[l.model] = by_model.get(l.model, 0) + (l.total_tokens or 0)
     
-    # 3. Retrieval Time Estimation
-    retrieval_time = None
-    if item:
-        logs = db.query(RetrievalLog).filter(RetrievalLog.item_id == item.id).all()
-        if logs:
-            retrieval_time = sum(l.retrieval_time_minutes for l in logs) / len(logs)
-        else:
-            retrieval_time = random.uniform(10, 120)  # Simulated
-    
-    # 4. Emergency Decision Engine
-    if not item:
-        decision = "Proceed with Procurement"
-        reason = f"Part '{req.part_name}' not found in internal inventory. External procurement required."
-        severity = "safe"
-    elif item.quantity <= 0:
-        decision = "Proceed with Procurement"
-        reason = f"Internal stock for '{item.name}' is depleted (0 available). External procurement required."
-        severity = "safe"
-    elif confidence < 60:
-        decision = "Physical Verification Required"
-        reason = f"System indicates {item.quantity} available, but data confidence is low ({confidence:.1f}%). Verify physically before relying on internal stock."
-        severity = "caution"
-    elif retrieval_time and retrieval_time > 60:
-        decision = "Use Internal Stock (High Retrieval Time)"
-        reason = f"Stock is available ({item.quantity}), but estimated retrieval time is high ({retrieval_time:.1f} mins). Factor this into emergency timeline."
-        severity = "caution"
-    else:
-        decision = "Use Internal Stock"
-        rt_str = f"Estimated retrieval: {retrieval_time:.1f} mins." if retrieval_time else "Quick retrieval expected."
-        reason = f"Optimal choice: {item.quantity} units available with {confidence:.1f}% data confidence. {rt_str} External procurement may be flagged."
-        severity = "critical"
-        
-    log_entry = EmergencyDecisionLog(
-        item_id=item.id if item else None,
-        part_name=req.part_name,
-        confidence_score=confidence,
-        retrieval_time=retrieval_time,
-        decision=decision,
-        reason=reason,
-        logged_at=datetime.datetime.now().isoformat(),
-        department=req.department,
-        severity=severity
-    )
-    db.add(log_entry)
-    db.commit()
+    configured_model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
     
     return {
-        "decision": decision,
-        "reason": reason,
-        "severity": severity,
-        "confidence_score": confidence,
-        "retrieval_time": retrieval_time,
-        "item_found": bool(item),
-        "item_details": {"name": item.name, "quantity": item.quantity, "location": item.location} if item else None,
-        "log_id": log_entry.id
+        "total_requests": total_requests,
+        "total_tokens": total_tokens,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": comp_tokens,
+        "by_user": by_user,
+        "by_model": by_model,
+        "configured_model": configured_model
     }
 
-@app.post("/api/preventive/action/{log_id}")
-def record_preventive_action(log_id: int, action: str, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    log_entry = db.query(EmergencyDecisionLog).filter(EmergencyDecisionLog.id == log_id).first()
-    if not log_entry:
-        raise HTTPException(status_code=404, detail="Decision log not found")
-        
-    log_entry.user_proceeded = (action == 'procure')
-    log_entry.user_action = "overridden" if (log_entry.severity == "critical" and action == "procure") else "followed"
-    db.commit()
-    return {"status": "success"}
+# ─── Audit Trail API ──────────────────────────────────────────────────
 
-@app.get("/api/preventive/history")
-def get_preventive_history(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    logs = db.query(EmergencyDecisionLog).order_by(EmergencyDecisionLog.id.desc()).limit(50).all()
-    return logs
-
-
-# ─── UNIFIED DATA INGESTION LAYER (MODULE 1) ─────────────────
-class UnifiedEventRequest(BaseModel):
-    event_id: str
-    source: str
-    timestamp: str
-    machine_id: Optional[str] = None
-    location_id: Optional[str] = None
-    vendor_id: Optional[str] = None
-    raw_text: Optional[str] = None
-    amount: Optional[float] = None
-    item_guess: Optional[str] = None
-    evidence_strength: Optional[float] = 0.5
-
-@app.post("/api/events/ingest")
-def ingest_event(req: UnifiedEventRequest, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Ingest operational signals into the UnifiedEvent timeline."""
-    event = UnifiedEvent(
-        event_id=req.event_id,
-        source=req.source,
-        timestamp=req.timestamp,
-        machine_id=req.machine_id,
-        location_id=req.location_id,
-        vendor_id=req.vendor_id,
-        raw_text=req.raw_text,
-        amount=req.amount,
-        item_guess=req.item_guess,
-        evidence_strength=req.evidence_strength
-    )
-    db.add(event)
-    
-    # Module 4: Update Living Risk Score
-    if req.item_guess:
-        from database import Inventory, LivingRiskScore
-        item = db.query(Inventory).filter(Inventory.name.ilike(f"%{req.item_guess}%")).first()
-        if item:
-            risk = db.query(LivingRiskScore).filter(LivingRiskScore.item_id == item.id).first()
-            if not risk:
-                risk = LivingRiskScore(item_id=item.id, risk_score=0.1, last_updated=req.timestamp)
-                db.add(risk)
-            if req.evidence_strength > 0.6:
-                risk.risk_score = min(1.0, risk.risk_score + 0.1)
-            risk.last_updated = req.timestamp
-
-    db.commit()
-    return {"status": "success", "event_id": req.event_id}
-
-@app.post("/api/inventory/rollback/{ledger_id}")
-def rollback_inventory(ledger_id: int, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Module 7: Inventory Rollback."""
-    from database import InventoryCorrectionLedger, Inventory
-    ledger = db.query(InventoryCorrectionLedger).filter(InventoryCorrectionLedger.id == ledger_id).first()
-    if not ledger:
-        raise HTTPException(status_code=404, detail="Ledger entry not found")
-    if ledger.status == "Rolled-back":
-        raise HTTPException(status_code=400, detail="Already rolled back")
-        
-    item = db.query(Inventory).filter(Inventory.id == ledger.item_id).first()
-    if not item:
-        raise HTTPException(status_code=404, detail="Inventory item not found")
-        
-    # Reverse the quantity
-    item.quantity -= ledger.proposed_quantity_change
-    ledger.status = "Rolled-back"
-    db.commit()
-    return {"status": "success", "item": item.name, "new_qty": item.quantity}
-
-# ─── V3 PREVENTIVE ROUTES (called by updated frontend) ─────────────────────
-
-@app.get("/api/preventive/check")
-def preventive_check_v3(
-    part_name: str,
-    machine_id: Optional[str] = None,
-    user: str = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    GET-based preventive check compatible with v3 frontend.
-    Fuzzy matches part name, returns full decision object.
-    """
-    if not part_name or len(part_name) < 2:
-        raise HTTPException(status_code=400, detail="part_name must be at least 2 characters")
-
-    from preventive_intelligence import normalize_item_description, find_smart_alternatives
-    part_lower = part_name.lower()
-    
-    # LP-09: Normalization Engine
-    norm_result = normalize_item_description(part_lower, db)
-    if norm_result["canonical_sku"]:
-        search_term = norm_result["canonical_sku"].lower()
-    else:
-        search_term = part_lower
-
-    all_inventory = db.query(Inventory).all()
-    matches = [
-        item for item in all_inventory
-        if (search_term in (item.name or "").lower() or
-            search_term in (item.sku or "").lower() or
-            search_term in (item.category or "").lower() or
-            any(t in (item.name or "").lower() for t in search_term.split()))
-    ]
-
-    if not matches:
-        _log_event(db, "PREVENTIVE_CHECK", None, f"No match for '{part_name}' — procurement recommended")
-        return {
-            "found": False,
-            "part_name": part_name,
-            "decision": "Proceed with Procurement",
-            "decision_color": "#ef4444",
-            "decision_icon": "🔴",
-            "reason": f"No matching item found in inventory for '{part_name}'. Emergency procurement is justified.",
-            "severity": "critical",
-            "confidence": {"confidence_score": 0, "grade": "F", "factors": []},
-            "retrieval": None,
-            "alternatives": [],
-            "explanation": {
-                "why_this_decision": "No matching inventory could be found even after synonym normalization.",
-                "risk_factors": ["Stock Out"],
-                "data_points_used": ["Inventory Catalog", "Synonym Dictionary"]
-            },
-            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-
-    best_match = sorted(matches, key=lambda i: i.quantity, reverse=True)[0]
-
-    # Confidence
-    inv_conf = db.query(InventoryConfidence).filter(InventoryConfidence.item_id == best_match.id).first()
-    conf_score = inv_conf.confidence_score if inv_conf else (85.0 if best_match.quantity > 0 else 20.0)
-    if not inv_conf:
-        db.add(InventoryConfidence(item_id=best_match.id, confidence_score=conf_score))
-        db.commit()
-
-    # Retrieval time
-    logs = db.query(RetrievalLog).filter(RetrievalLog.item_id == best_match.id).all()
-    retrieval_minutes = sum(l.retrieval_time_minutes for l in logs) / len(logs) if logs else round(random.uniform(10, 90), 1)
-
-    # LP-06: Workforce ETA Integration
-    from database import ShiftRoster
-    wh_id = best_match.location or "WH-Alpha"
-    now_hour = datetime.datetime.now().hour
-    rosters = db.query(ShiftRoster).filter(ShiftRoster.warehouse_id == wh_id).all()
-    staff_available = True
-    if rosters:
-        staff_available = False
-        for r in rosters:
-            try:
-                start_h = int(r.start_time.split(":")[0])
-                end_h = int(r.end_time.split(":")[0])
-                # Handle night shifts wrapping around midnight
-                if start_h <= end_h:
-                    if start_h <= now_hour < end_h and r.staff_count > 0:
-                        staff_available = True
-                        break
-                else:
-                    if (now_hour >= start_h or now_hour < end_h) and r.staff_count > 0:
-                        staff_available = True
-                        break
-            except:
-                pass
-
-    if not staff_available:
-        retrieval_minutes += 720 # Next shift delay
-
-    # Decision logic
-    if best_match.quantity <= 0:
-        decision = "Proceed with Procurement"
-        decision_color = "#ef4444"
-        decision_icon = "🔴"
-        severity = "critical"
-        reason = f"Stock for '{best_match.name}' is depleted (0 units). External procurement required."
-    elif not staff_available:
-        decision = "Use Internal Stock (Plan Ahead)"
-        decision_color = "#f59e0b"
-        decision_icon = "🟡"
-        severity = "caution"
-        reason = f"Stock available ({best_match.quantity} units), but NO STAFF at {wh_id} currently. Est. retrieval: {retrieval_minutes:.0f} mins."
-    elif conf_score < 60:
-        decision = "Physical Verification Required"
-        decision_color = "#f59e0b"
-        decision_icon = "🟡"
-        severity = "caution"
-        reason = f"System shows {best_match.quantity} units but data confidence is low ({conf_score:.1f}%). Verify physically first."
-    elif retrieval_minutes > 60:
-        decision = "Use Internal Stock (Plan Ahead)"
-        decision_color = "#f59e0b"
-        decision_icon = "🟡"
-        severity = "caution"
-        reason = f"Stock available ({best_match.quantity} units), but retrieval time is {retrieval_minutes:.0f} mins. Factor into your timeline."
-    else:
-        decision = "Use Internal Stock"
-        decision_color = "#22c55e"
-        decision_icon = "🟢"
-        severity = "safe"
-        reason = f"{best_match.quantity} units available at {best_match.location or 'warehouse'} with {conf_score:.1f}% confidence. Est. retrieval: {retrieval_minutes:.0f} mins."
-
-    grade = "A" if conf_score >= 85 else "B" if conf_score >= 70 else "C" if conf_score >= 50 else "D"
-    conf_color = "#22c55e" if conf_score >= 70 else "#f59e0b" if conf_score >= 40 else "#ef4444"
-    conf_label = "High" if conf_score >= 70 else "Medium" if conf_score >= 40 else "Low"
-
-    # Compute individual breakdown sub-scores (weighted)
-    qty = best_match.quantity or 0
-    recency_score   = round(min(35, (conf_score / 100) * 35), 1)
-    stability_score = round(min(25, 25 if qty >= 5 else (qty / 5) * 25), 1)
-    accuracy_score  = round(min(25, 25 if inv_conf else 12.5), 1)
-    verify_score    = round(min(15, 15 if (inv_conf and inv_conf.verification_status == 'verified') else 5), 1)
-
-    # Hours since last update (approximate from mismatch count as proxy)
-    hours_since = round(random.uniform(1, 72), 1)
-
-    confidence_obj = {
-        "confidence_score": round(conf_score, 1),
-        "confidence_label": conf_label,
-        "grade": grade,
-        "confidence_color": conf_color,
-        "breakdown": {
-            "recency":      recency_score,
-            "stability":    stability_score,
-            "accuracy":     accuracy_score,
-            "verification": verify_score,
-        },
-        "hours_since_update": hours_since,
-        "factors": [
-            {"label": "Stock Level",        "value": f"{qty} units",                                                     "score": min(100, qty * 5)},
-            {"label": "Data Freshness",     "value": getattr(best_match, 'last_updated', 'N/A'),                         "score": round(conf_score)},
-            {"label": "Verification Status","value": inv_conf.verification_status if inv_conf else "unverified",         "score": 80 if inv_conf else 40},
-        ],
-        "item_id":       best_match.id,
-        "item_name":     best_match.name,
-        "sku":           best_match.sku,
-        "location":      best_match.location,
-        "quantity":      qty,
-        "last_verified": inv_conf.last_verified if inv_conf else None,
-        "mismatch_count":inv_conf.mismatch_count if inv_conf else 0,
-    }
-
-    in_stock = qty > 0
-    if not staff_available:
-        speed_label = "NO_STAFF (Off-Hours)"
-    else:
-        speed_label = "Fast" if retrieval_minutes <= 30 else "Moderate" if retrieval_minutes <= 60 else "Slow"
-    distance_km = round(retrieval_minutes * 0.5, 1)  # estimate: ~0.5 km per minute
-
-    retrieval_obj = {
-        "in_stock":          in_stock,
-        "estimated_minutes": round(retrieval_minutes),
-        "time_label":        speed_label,
-        "time_color":        "#22c55e" if retrieval_minutes <= 30 else "#f59e0b" if retrieval_minutes <= 60 else "#ef4444",
-        "warehouse_location": best_match.location or "Main Warehouse",
-        "distance_km":       distance_km,
-        "urgency":           speed_label,
-    }
-
-    # Smart alternatives using LP-04 Safety checks
-    alternatives = find_smart_alternatives(part_name, db, exclude_id=str(best_match.id), top_n=3, machine_id=machine_id)
-
-    _log_event(db, "PREVENTIVE_CHECK", best_match.id, f"Part '{part_name}' checked — Decision: {decision} (Confidence: {conf_score:.0f}%, Retrieval: {retrieval_minutes:.0f} min)")
-
-    return {
-        "found":             True,
-        "part_name":         part_name,
-        "item_id":           str(best_match.id),
-        "item_name":         best_match.name,
-        "item_sku":          best_match.sku or "-",
-        "quantity_available": qty,
-        "decision":          decision,
-        "decision_color":    decision_color,
-        "decision_icon":     decision_icon,
-        "reason":            reason,
-        "severity":          severity,
-        "confidence":        confidence_obj,
-        "retrieval":         retrieval_obj,
-        "alternatives":      alternatives,
-        "total_matches":     len(matches),
-        "all_matches":       [{"id": m.id, "name": m.name, "quantity": m.quantity, "location": m.location} for m in matches[:5]],
-        "explanation": {
-            "why_this_decision": reason,
-            "risk_factors": [
-                f"Confidence Score is {conf_score:.1f}%",
-                f"Retrieval Time is {retrieval_minutes:.0f} mins",
-                "No Staff Available" if not staff_available else "Staff Available"
-            ],
-            "data_points_used": ["Inventory Quantity", "Retrieval Logs", "Shift Roster"]
-        },
-        "timestamp":         datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    }
-
-
-class PreventiveDecisionLogRequestV3(BaseModel):
-    item_id: Optional[str] = None
-    part_name: str
-    confidence_score: Optional[float] = None
-    retrieval_time: Optional[float] = None
-    decision: str
-    reason: Optional[str] = None
-    user_proceeded: Optional[bool] = None
-    user_action: Optional[str] = None  # "followed" | "overridden"
-    department: Optional[str] = None
-
-
-@app.post("/api/preventive/log-decision")
-def log_preventive_decision_v3(
-    body: PreventiveDecisionLogRequestV3,
-    user: str = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Log the user's action after receiving a preventive decision."""
-    log_entry = EmergencyDecisionLog(
-        item_id=body.item_id,
-        part_name=body.part_name,
-        confidence_score=body.confidence_score or 0,
-        retrieval_time=body.retrieval_time,
-        decision=body.decision,
-        reason=body.reason,
-        user_proceeded=body.user_proceeded,
-        user_action=body.user_action,
-        logged_at=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        department=body.department,
-    )
-    db.add(log_entry)
-    db.commit()
-
-    action_label = "followed" if body.user_action == "followed" else "overrode"
-    detail = f"User {action_label} recommendation '{body.decision}' for '{body.part_name}'"
-    _log_event(db, "PREVENTIVE_DECISION_LOG", body.item_id, detail)
-
-    # ── Module 8: Trust Momentum ─────────────────────
-    dept = body.department or "Unknown"
-    employee = user
-    trust = db.query(TrustMomentum).filter(TrustMomentum.employee_id == employee).first()
-    if not trust:
-        trust = TrustMomentum(employee_id=employee, department=dept, trust_score=50.0, last_updated=datetime.datetime.now().isoformat())
-        db.add(trust)
-
-    if body.user_action == "followed":
-        trust.trust_score = min(100.0, trust.trust_score + 2.0)
-    elif body.user_action == "overridden" and "internal stock" in (body.decision or "").lower():
-        _log_event(db, "SHADOW_RISK_OVERRIDE", body.item_id,
-            f"User bypassed 'Use Internal Stock' for '{body.part_name}'. External purchase may constitute shadow procurement.")
-        trust.trust_score = max(0.0, trust.trust_score - 10.0)
-        
-        if body.item_id:
-            inv_conf = db.query(InventoryConfidence).filter(InventoryConfidence.item_id == body.item_id).first()
-            if inv_conf:
-                inv_conf.confidence_score = max(0.0, inv_conf.confidence_score - 25.0)
-                inv_conf.mismatch_count += 1
-                inv_conf.verification_status = "mismatch_reported"
-                
-                v_task = VerificationTask(
-                    sku=inv_conf.item_id,
-                    priority="urgent",
-                    reason="user_override_mismatch",
-                    requested_at=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                )
-                db.add(v_task)
-            
-            shadow_alert = ShadowPurchase(
-                detected_at=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                reason=f"Preventive Override: Bypassed internal stock for {body.part_name}",
-                risk_score=0.85,
-                confidence_score=0.9,
-                status="Pending",
-                bypassed_preventive=True,
-                confirmed_shadow=False
-            )
-            db.add(shadow_alert)
-        
-    trust.last_updated = datetime.datetime.now().isoformat()
-    db.commit()
-
-    return {"status": "success", "logged": True, "message": detail, "shadow_flag_raised": body.user_action == "overridden", "new_trust_score": trust.trust_score}
-
-@app.get("/api/inventory/network-search")
-def network_search(part_name: str, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """LP-12 (Network Query API): Check all warehouses for a requested SKU and compare transfer vs external."""
-    part_lower = part_name.lower()
-    from sqlalchemy import func
-    from database import InventoryLocations, WarehouseTransferCosts
-    items = db.query(Inventory).filter(
-        (func.lower(Inventory.name).like(f"%{part_lower}%")) |
-        (func.lower(Inventory.sku).like(f"%{part_lower}%"))
-    ).all()
-    
-    if not items:
-        return {"status": "not_found", "message": "No matching inventory items found in the network."}
-        
-    best_item = items[0]
-    locations = db.query(InventoryLocations).filter(InventoryLocations.item_id == best_item.id).all()
-    
-    results = []
-    current_wh = "WH-Alpha" # default
-    
-    for loc in locations:
-        if loc.quantity <= 0: continue
-        
-        cost = 0.0
-        eta = 0.0
-        if loc.warehouse_id != current_wh:
-            tc = db.query(WarehouseTransferCosts).filter(
-                WarehouseTransferCosts.source_warehouse == loc.warehouse_id,
-                WarehouseTransferCosts.destination_warehouse == current_wh
-            ).first()
-            if tc:
-                cost = tc.transfer_cost
-                eta = tc.estimated_hours
-            else:
-                cost = 100.0
-                eta = 24.0
-                
-        external_cost = (best_item.unit_price or 100) * 1.5 + 50
-        external_eta = 48.0
-        recommendation = "TRANSFER" if cost < external_cost and eta < external_eta else "COMPARE"
-        
-        results.append({
-            "warehouse": loc.warehouse_id,
-            "quantity": loc.quantity,
-            "transfer_cost": cost,
-            "estimated_hours": eta,
-            "recommendation": recommendation,
-            "external_cost_comparison": external_cost,
-            "external_eta_comparison": external_eta
-        })
-        
-    results.sort(key=lambda x: x["estimated_hours"])
-    return {"part": best_item.name, "sku": best_item.sku, "network_options": results}
-
-
-@app.get("/api/preventive/decision-history")
-def get_decision_history_v3(
-    limit: int = 50,
-    user: str = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Return history of all emergency decisions made."""
-    logs = db.query(EmergencyDecisionLog).order_by(EmergencyDecisionLog.id.desc()).limit(limit).all()
+@app.get("/api/audit")
+@app.get("/api/audit-logs")
+async def get_audit_trail(limit: int = 100, db: Session = Depends(get_db)):
+    """Fetch immutable audit records."""
+    logs = db.query(AuditLog).order_by(AuditLog.id.desc()).limit(limit).all()
     return [
         {
             "id": l.id,
-            "part_name": l.part_name,
-            "item_id": l.item_id,
-            "decision": l.decision,
-            "confidence_score": l.confidence_score,
-            "retrieval_time": l.retrieval_time,
-            "user_action": l.user_action,
-            "severity": getattr(l, 'severity', None),
-            "logged_at": l.logged_at,
-            "department": l.department,
+            "timestamp": l.timestamp,
+            "user": l.user,
+            "action": l.action,
+            "target": l.target_id,
+            "details": l.details
         }
         for l in logs
     ]
 
 
-@app.get("/api/preventive/confidence")
-def get_preventive_confidence_v3(
-    user: str = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Return confidence scores for all inventory items."""
-    all_items = db.query(Inventory).all()
-    scores = []
-    for item in all_items:
-        conf = db.query(InventoryConfidence).filter(InventoryConfidence.item_id == item.id).first()
-        conf_score = conf.confidence_score if conf else (80.0 if item.quantity > 0 else 20.0)
-        grade = "A" if conf_score >= 85 else "B" if conf_score >= 70 else "C" if conf_score >= 50 else "D"
-        conf_color = "#22c55e" if conf_score >= 70 else "#f59e0b" if conf_score >= 40 else "#ef4444"
-        logs = db.query(RetrievalLog).filter(RetrievalLog.item_id == item.id).all()
-        retrieval_minutes = sum(l.retrieval_time_minutes for l in logs) / len(logs) if logs else round(random.uniform(10, 90), 1)
-        scores.append({
-            "item_id": item.id,
-            "item_name": item.name,
-            "sku": item.sku,
-            "confidence_score": round(conf_score, 1),
-            "grade": grade,
-            "confidence_color": conf_color,
-            "last_verified": conf.last_verified if conf else None,
-            "mismatch_count": conf.mismatch_count if conf else 0,
-            "verification_status": conf.verification_status if conf else "unverified",
-            "retrieval": {"estimated_minutes": round(retrieval_minutes), "warehouse_location": item.location or "Warehouse"},
-        })
+# ─── Simulator Controls API ───────────────────────────────────────────
 
-    avg_conf = round(sum(s["confidence_score"] for s in scores) / len(scores), 1) if scores else 0
-    return {
-        "items": scores,
-        "total": len(scores),
-        "high_confidence": sum(1 for s in scores if s["confidence_score"] >= 70),
-        "medium_confidence": sum(1 for s in scores if 40 <= s["confidence_score"] < 70),
-        "low_confidence": sum(1 for s in scores if s["confidence_score"] < 40),
-        "avg_confidence": avg_conf,
-    }
+@app.get("/api/simulator/status")
+async def get_simulator_status():
+    """Get the current running state of the background simulator."""
+    global simulator_running
+    return {"status": "success", "simulator_running": simulator_running}
 
+@app.post("/api/simulator/toggle")
+async def toggle_simulator(current_user: dict = Depends(require_roles(["admin", "manager"]))):
+    """Toggle background stock movement simulation."""
+    global simulator_running
+    simulator_running = not simulator_running
+    await manager.broadcast({
+        "type": "connection_info",
+        "data": {"clients": len(manager.active_connections), "simulator": simulator_running}
+    })
+    return {"status": "success", "simulator_running": simulator_running}
 
-# ─── PHASE 4 & 5 ENDPOINTS ────────────────────────────────
+@app.post("/api/simulator/start")
+async def start_simulator(current_user: dict = Depends(require_roles(["admin", "manager"]))):
+    global simulator_running
+    simulator_running = True
+    return {"status": "success", "simulator_running": True}
 
-# Exhibition AI response cache — pre-computed answers to the 6 most common
-# judge questions so the copilot responds instantly even on slow WiFi.
-_EXHIBITION_CACHE: dict[str, str | None] = {
-    "top risks":       None,
-    "which vendors":   None,
-    "collusion":       None,
-    "shadow rate":     None,
-    "department":      None,
-    "what are my top": None,
-}
-
-def _match_exhibition_key(query: str) -> str | None:
-    q = query.lower()
-    for key in _EXHIBITION_CACHE:
-        if key in q:
-            return key
-    return None
-
-
-@app.on_event("startup")
-async def startup_event():
-    import asyncio
-    from recalibration import intelligence_background_loop
-    asyncio.create_task(intelligence_background_loop())
-    asyncio.create_task(_warm_exhibition_cache())
-
-
-async def _warm_exhibition_cache():
-    """Pre-compute answers to the 6 standard exhibition questions at startup."""
-    import asyncio
-    await asyncio.sleep(5)   # wait for DB + AI to be ready
-    warmup = [
-        ("top risks",       "What are the top 3 risks in our procurement data right now?"),
-        ("which vendors",   "Which vendors need urgent attention and why?"),
-        ("collusion",       "Is there a vendor collusion pattern in our data?"),
-        ("shadow rate",     "What is our current shadow purchase rate and what does it mean?"),
-        ("department",      "Which department has the highest shadow purchasing activity?"),
-        ("what are my top", "What are my top recommended actions to reduce shadow spend?"),
-    ]
-    for cache_key, question in warmup:
-        try:
-            answer = chat_with_groq(
-                question,
-                context="You are the ShadowSync AI Copilot for enterprise procurement compliance.",
-                conversation_history=[],
-            )
-            if isinstance(answer, dict):
-                answer = answer.get("response") or answer.get("message") or str(answer)
-            _EXHIBITION_CACHE[cache_key] = str(answer)
-        except Exception:
-            pass   # warmup failures are non-fatal — fresh Groq call will serve the answer
-
-@app.get("/api/alerts/depletion")
-def get_depletion_alerts(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    from database import DepletionAlerts
-    alerts = db.query(DepletionAlerts).filter(DepletionAlerts.status == 'pending').all()
-    return alerts
-
-class SignalEventRequest(BaseModel):
-    source_type: str
-    raw_data: dict
-
-@app.post("/api/signals/ingest")
-def ingest_signal(req: SignalEventRequest, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Phase 5: Unified Ingestion Engine"""
-    from database import SignalEvents, ShadowPurchase
-    import json
-    import datetime
-    
-    # Store raw signal
-    signal = SignalEvents(
-        source_type=req.source_type,
-        timestamp=datetime.datetime.now().isoformat(),
-        raw_data=json.dumps(req.raw_data)
-    )
-    db.add(signal)
-    
-    # Simple correlation logic
-    recent_shadows = db.query(ShadowPurchase).filter(ShadowPurchase.status == "Pending").all()
-    
-    for shadow in recent_shadows:
-        try:
-            shadow_time = datetime.datetime.strptime(shadow.detected_at, "%Y-%m-%d %H:%M:%S")
-            if (datetime.datetime.now() - shadow_time).total_seconds() < 48 * 3600:
-                shadow.risk_score = min(1.0, shadow.risk_score + 0.15)
-                shadow.confidence_score = min(1.0, shadow.confidence_score + 0.1)
-                signal.correlated_shadow_id = shadow.id
-                break
-        except Exception:
-            pass
-            
-    db.commit()
-    return {"status": "success", "signal_id": signal.id}
-
-@app.post("/api/signals/gate-entry")
-def gate_entry_signal(req: dict, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    return ingest_signal(SignalEventRequest(source_type="gate_entry", raw_data=req), db)
-
-@app.post("/api/signals/petty-cash")
-def petty_cash_signal(req: dict, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    return ingest_signal(SignalEventRequest(source_type="petty_cash", raw_data=req), db)
-
-@app.post("/api/signals/dept-transfer")
-def dept_transfer_signal(req: dict, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    return ingest_signal(SignalEventRequest(source_type="dept_transfer", raw_data=req), db)
-
-# ─── PHASE 6 ENDPOINTS ────────────────────────────────────
-
-@app.get("/api/users/{user_id}/trust-profile")
-def get_user_trust_profile(user_id: str, current_user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    from database import UserTrustMetrics
-    metrics = db.query(UserTrustMetrics).filter(UserTrustMetrics.user_id == user_id).first()
-    if not metrics:
-        metrics = UserTrustMetrics(
-            user_id=user_id, total_checks=0, followed_recommendations=0,
-            overrides_that_were_correct=0, internal_retrievals_successful=0,
-            estimated_cost_saved=0.0, estimated_time_saved_minutes=0, trust_score=50.0
-        )
-        db.add(metrics)
-        db.commit()
-        
-    return {
-        "user_id": metrics.user_id,
-        "trust_score": metrics.trust_score,
-        "estimated_cost_saved": metrics.estimated_cost_saved,
-        "stats": {
-            "total_checks": metrics.total_checks,
-            "followed_recommendations": metrics.followed_recommendations,
-            "correct_overrides": metrics.overrides_that_were_correct
-        }
-    }
-
-class DemoScenarioRequest(BaseModel):
-    scenario_id: str
-
-@app.post("/api/demo/run-scenario")
-async def run_demo_scenario(req: DemoScenarioRequest, user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Triggers pre-scripted events for Judge Demonstration."""
-    import asyncio
-    if req.scenario_id == "late_night_breakdown":
-        # Simulate a gate entry
-        gate_data = {"item": "Bearing 6204", "guard": "Night Shift Gate", "time": datetime.datetime.now().isoformat()}
-        ingest_signal(SignalEventRequest(source_type="gate_entry", raw_data=gate_data), db)
-        
-        # Broadcast to UI
-        await manager.broadcast({
-            "type": "demo_event", 
-            "data": {"title": "Signal Detected", "message": "Gate entry logged for Bearing 6204."}
-        })
-        
-        return {"status": "Scenario initiated"}
-
-    elif req.scenario_id == "trust_metric_boost":
-        from database import UserTrustMetrics
-        metrics = db.query(UserTrustMetrics).filter(UserTrustMetrics.user_id == "demo_user").first()
-        if not metrics:
-            metrics = UserTrustMetrics(user_id="demo_user")
-            db.add(metrics)
-        metrics.trust_score = min(100, metrics.trust_score + 15)
-        metrics.estimated_cost_saved += 450.0
-        db.commit()
-        await manager.broadcast({
-            "type": "demo_event",
-            "data": {"title": "Trust Improved", "message": "User trust score increased due to successful retrieval."}
-        })
-        return {"status": "Scenario initiated"}
-
-    else:
-        raise HTTPException(status_code=400, detail="Unknown scenario")
-
+@app.post("/api/simulator/stop")
+async def stop_simulator(current_user: dict = Depends(require_roles(["admin", "manager"]))):
+    global simulator_running
+    simulator_running = False
+    return {"status": "success", "simulator_running": False}
 
 @app.post("/api/demo/reset")
-async def demo_reset(user: str = Depends(get_current_user), db: Session = Depends(get_db)):
-    """
-    Resets the database to a clean exhibition state.
-    - All shadow purchases -> status='Pending', verdicts cleared
-    - All UserFeedback rows deleted (retrain counter resets to 0)
-    - Vendor trust scores reset to 75
-    - AuditLog cleared
-    Safe-guard: blocked when ENV=production.
-    USE ONLY FOR DEMO.
-    """
-    if os.environ.get("ENV", "dev").lower() == "production":
-        raise HTTPException(status_code=403, detail="Demo reset not available in production")
+async def reset_demo_data(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin"]))
+):
+    """Reset catalog to clean factory default state with realistic welding spares."""
+    from seed_data import seed_database
+    seed_database(db)
+    stats_payload = _compute_stats(db)
+    await manager.broadcast({"type": "demo_reset", "data": {"message": "Catalog refreshed"}})
+    await manager.broadcast({"type": "stats_update", "data": stats_payload})
+    return {"status": "success", "message": "Demo data reset successfully"}
 
-    # Reset shadow purchase verdicts and statuses
-    shadows = db.query(ShadowPurchase).all()
-    for s in shadows:
-        s.status           = "Pending"
-        s.reviewer_verdict = None
-        s.reviewed_at      = None
-        s.reviewer_id      = None
-        s.confirmed_shadow = False
-        s.false_positive   = False
-        s.needs_review     = False
 
-    # Clear all human feedback (resets retrain counter)
-    db.query(UserFeedback).delete()
 
-    # Reset vendor trust scores
-    db.query(Vendor).update({"trust_score": 75.0})
+# ─── Automation Settings & Run API ────────────────────────────────────
 
-    # Clear audit log for a clean exhibit view
-    db.query(AuditLog).delete()
-    db.commit()
+@app.get("/api/settings/automation")
+async def get_automation_settings_endpoint(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Return current automation configuration for any authenticated user."""
+    return get_automation_settings_dict(db)
 
-    # Write a single reset marker so the audit trail isn't completely empty
+@app.put("/api/settings/automation")
+async def update_automation_settings_endpoint(
+    req: AutomationSettingsUpdate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Update automation settings with range validation, audit logging, and job rescheduling."""
+    # Validate ranges
+    if req.scan_interval_minutes is not None:
+        if req.scan_interval_minutes < 1 or req.scan_interval_minutes > 1440:
+            raise HTTPException(status_code=400, detail="Scan interval must be between 1 and 1440 minutes.")
+    if req.safety_days is not None:
+        if req.safety_days < 0 or req.safety_days > 365:
+            raise HTTPException(status_code=400, detail="Safety days must be between 0 and 365.")
+    if req.auto_approve_limit is not None:
+        if req.auto_approve_limit < 0:
+            raise HTTPException(status_code=400, detail="Auto-approve limit cannot be negative.")
+    if req.auto_approve_min_supplier_rating is not None:
+        if req.auto_approve_min_supplier_rating < 0.0 or req.auto_approve_min_supplier_rating > 5.0:
+            raise HTTPException(status_code=400, detail="Supplier rating must be between 0.0 and 5.0.")
+    if req.digest_time is not None:
+        parts = req.digest_time.split(":")
+        if len(parts) != 2 or not parts[0].isdigit() or not parts[1].isdigit():
+            raise HTTPException(status_code=400, detail="Digest time must be in HH:MM format.")
+        dh, dm = int(parts[0]), int(parts[1])
+        if dh < 0 or dh > 23 or dm < 0 or dm > 59:
+            raise HTTPException(status_code=400, detail="Digest time must be between 00:00 and 23:59.")
+
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    updates = req.dict(exclude_unset=True)
+    for key, val in updates.items():
+        if val is None:
+            continue
+        str_val = "true" if val is True else ("false" if val is False else str(val))
+        setting = db.query(AppSetting).filter(AppSetting.key == key).first()
+        if not setting:
+            setting = AppSetting(key=key, value=str_val, updated_by=current_user["username"], updated_at=now_str)
+            db.add(setting)
+        else:
+            setting.value = str_val
+            setting.updated_by = current_user["username"]
+            setting.updated_at = now_str
+
     db.add(AuditLog(
-        action    = "DEMO_RESET",
-        details   = "Exhibition demo reset - all shadows restored to Pending, feedback cleared.",
-        user      = user,
-        timestamp = datetime.datetime.now().isoformat(),
-        target_id = "SYSTEM",
+        timestamp=now_str,
+        action="AUTOMATION_SETTINGS_UPDATED",
+        user=current_user["username"],
+        target_id="AUTOMATION_SETTINGS",
+        details=f"Updated automation settings: {', '.join(f'{k}={v}' for k, v in updates.items())}"
     ))
     db.commit()
 
-    # Broadcast so all connected dashboard tabs reload automatically
-    await manager.broadcast({"type": "demo_reset", "message": "System reset to exhibition state"})
-
-    return {
-        "status":        "reset_complete",
-        "shadows_reset": len(shadows),
-        "message":       "System ready for next exhibition demo",
-    }
-
-
-
-
-# ─── ADVANCED DIFFERENTIATOR 1: VENDOR RING DETECTION ────────────────────────
-
-@app.get("/api/vendor-rings")
-def get_vendor_rings(db: Session = Depends(get_db), user: str = Depends(get_current_user)):
-    """
-    Graph-based collusion ring detection.
-    Builds a bipartite vendor-employee adjacency graph from shadow purchase
-    history, runs Union-Find clustering, and returns scored ring reports.
-    """
-    try:
-        shadows      = db.query(ShadowPurchase).all()
-        transactions = {t.id: t for t in db.query(Transaction).all()}
-        vendors      = {v.name: v for v in db.query(Vendor).all()}
-
-        report = vendor_ring_detector.analyze(shadows, transactions, vendors)
-        _log_event(db, "vendor_ring_scan", details=f"{report.get('rings_detected', 0)} rings detected")
-        return report
-    except Exception as e:
-        logger.error(f"[VendorRing] Analysis failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/vendor-rings/{vendor_name}/profile")
-def get_vendor_ring_profile(
-    vendor_name: str,
-    db: Session = Depends(get_db),
-    user: str = Depends(get_current_user)
-):
-    """
-    Return graph neighbourhood of a specific vendor: its direct links,
-    shared employees/departments, and risk context.
-    """
-    try:
-        shadows      = db.query(ShadowPurchase).all()
-        transactions = {t.id: t for t in db.query(Transaction).all()}
-        vendors      = {v.name: v for v in db.query(Vendor).all()}
-
-        report = vendor_ring_detector.analyze(shadows, transactions, vendors)
-
-        # Find which ring(s) this vendor belongs to
-        belonging_rings = [
-            r for r in report.get("rings", [])
-            if vendor_name in r["members"]
-        ]
-        vendor_obj = vendors.get(vendor_name)
-
-        return {
-            "vendor_name":   vendor_name,
-            "in_ring":       len(belonging_rings) > 0,
-            "rings":         belonging_rings,
-            "vendor_details": {
-                "risk_level": vendor_obj.risk_level if vendor_obj else "Unknown",
-                "approved":   vendor_obj.approved   if vendor_obj else False,
-                "trust_score": vendor_obj.trust_score if vendor_obj else 50.0,
-            } if vendor_obj else None,
-        }
-    except Exception as e:
-        logger.error(f"[VendorRing] Profile failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ─── ADVANCED DIFFERENTIATOR 2: ML MODEL TRANSPARENCY ────────────────────────
-
-@app.get("/api/ml/status")
-def get_ml_status(db: Session = Depends(get_db), user: str = Depends(get_current_user)):
-    """
-    Deep ML model transparency endpoint.
-    Returns: live feature weights, model fitness, drift metrics,
-    feedback impact, statistical validity summary, and XAI levers.
-    """
-    import numpy as np
-
-    # ── Feature weight proxy from Isolation Forest estimators ──────
-    # 10 features matching DataIngestionLayer.extract_transaction_features()
-    feature_names = [
-        "amount", "payment_risk", "vendor_risk", "is_weekend",
-        "vendor_approved",  # F5: 0=approved vendor, 1=unapproved (risk inversion)
-        "has_card_holder", "amount_deviation", "dept_risk_score",
-        "hour_risk", "is_recurring"
-    ]
-    n_features = 10
-    feature_weights = {
-        "amount": 0.22, "payment_risk": 0.18, "vendor_risk": 0.15,
-        "is_weekend": 0.08, "vendor_approved": 0.12, "has_card_holder": 0.06,
-        "amount_deviation": 0.14, "dept_risk_score": 0.05,
-        "hour_risk": 0.03, "is_recurring": 0.02,
-    }
-
-    if shadow_ai._fitted and hasattr(shadow_ai.anomaly_detector, 'estimators_'):
+    # Reschedule APScheduler job if scan interval changed
+    if req.scan_interval_minutes is not None and scheduler.running:
         try:
-            importances = np.zeros(n_features)
-            for tree in shadow_ai.anomaly_detector.estimators_:
-                tree_imp = tree.feature_importances_
-                if len(tree_imp) == n_features:
-                    importances += tree_imp
-            importances /= max(1, len(shadow_ai.anomaly_detector.estimators_))
-            total = importances.sum() or 1.0
-            for i, name in enumerate(feature_names):
-                feature_weights[name] = round(float(importances[i] / total), 4)
-        except Exception:
-            pass
-
-    # ── Model fitness metrics ──────────────────────────────────────
-    total_shadows   = db.query(ShadowPurchase).count()
-    confirmed       = db.query(ShadowPurchase).filter(ShadowPurchase.confirmed_shadow == True).count()
-    false_positives = db.query(ShadowPurchase).filter(ShadowPurchase.false_positive  == True).count()
-    total_feedback  = db.query(UserFeedback).count()
-    applied_fb      = db.query(UserFeedback).filter(UserFeedback.applied == True).count()
-
-    precision = confirmed / max(1, confirmed + false_positives)
-    fp_rate   = false_positives / max(1, total_shadows)
-
-    # ── Drift detection (compare recent vs historical risk scores) ──
-    all_shadows   = db.query(ShadowPurchase).order_by(ShadowPurchase.id.desc()).all()
-    recent_scores = [s.risk_score for s in all_shadows[:50]  if s.risk_score is not None]
-    older_scores  = [s.risk_score for s in all_shadows[50:150] if s.risk_score is not None]
-
-    recent_mean = round(float(np.mean(recent_scores)),  3) if recent_scores else 0.0
-    older_mean  = round(float(np.mean(older_scores)),   3) if older_scores  else 0.0
-    drift_delta = round(recent_mean - older_mean, 3)
-    drift_flag  = abs(drift_delta) > 0.10  # > 10% shift is flagged
-
-    # ── Feedback adjustment impact ─────────────────────────────────
-    global_adj  = shadow_ai._feedback_adjustments.get("_global", 0.0)
-    cat_adj_map = {k: round(v, 4) for k, v in shadow_ai._feedback_adjustments.items() if k != "_global"}
-
-    # ── Confidence calibration (shadow vs decision outcomes) ────────
-    high_conf_shadows  = db.query(ShadowPurchase).filter(ShadowPurchase.confidence_score >= 0.8).count()
-    high_conf_correct  = db.query(ShadowPurchase).filter(
-        ShadowPurchase.confidence_score >= 0.8,
-        ShadowPurchase.confirmed_shadow == True
-    ).count()
-    calibration_rate   = round(high_conf_correct / max(1, high_conf_shadows), 3)
-
-    # ── Statistical validity ───────────────────────────────────────
-    training_samples   = len(all_shadows)
-    model_fitted       = shadow_ai._fitted
-    confidence_in_model = (
-        "High"   if training_samples > 200 and precision > 0.75 else
-        "Medium" if training_samples > 50  and precision > 0.5  else
-        "Low"
-    )
-
-    # ── XAI risk levers (current global adjusters) ─────────────────
-    xai_levers = {
-        "amount_threshold_USD":    2000,
-        "weekend_risk_boost":      True,
-        "unapproved_vendor_malus": 0.15,
-        "card_purchase_malus":     0.20,
-        "after_hours_malus":       0.12,
-        "amount_deviation_weight": 0.08,
-        "dept_risk_weight":        0.05,
-        "feedback_learning_rate":  0.15,
-        "contamination_param":     0.20,
-        "n_estimators":            150,
-        "feature_count":           10,
-    }
-
-    return {
-        "model_version":     "IsolationForest-v3 (10-feature)",
-        "framework":         "scikit-learn",
-        "fitted":            model_fitted,
-        "training_samples":  training_samples,
-        "last_retrained":    datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "feature_weights":   feature_weights,
-        "fitness": {
-            "precision":           round(precision, 3),
-            "false_positive_rate": round(fp_rate, 3),
-            "total_shadows":       total_shadows,
-            "confirmed":           confirmed,
-            "false_positives":     false_positives,
-        },
-        "drift": {
-            "recent_mean_risk":  recent_mean,
-            "historical_mean":   older_mean,
-            "delta":             drift_delta,
-            "drift_detected":    drift_flag,
-            "status":            "⚠️ Drift Detected — Consider Retraining" if drift_flag else "✅ Stable",
-        },
-        "feedback_impact": {
-            "total_submissions":    total_feedback,
-            "applied":              applied_fb,
-            "global_risk_offset":   round(global_adj, 4),
-            "category_adjustments": cat_adj_map,
-            "feedback_count_in_ai": shadow_ai._feedback_count,
-        },
-        "calibration": {
-            "high_confidence_shadows": high_conf_shadows,
-            "high_conf_correct":       high_conf_correct,
-            "calibration_rate":        calibration_rate,
-            "confidence_in_model":     confidence_in_model,
-        },
-        "xai_levers":        xai_levers,
-        "statistical_note": (
-            f"Model trained on {training_samples} samples. "
-            f"Precision: {precision:.0%}. "
-            f"{'Drift alert active.' if drift_flag else 'No significant drift detected.'}"
-        ),
-    }
-
-
-@app.post("/api/ml/retrain")
-async def trigger_retrain(db: Session = Depends(get_db), user: str = Depends(get_current_user)):
-    """Force immediate feedback-aware retraining of the Isolation Forest."""
-    try:
-        transactions  = db.query(Transaction).all()
-        vendors_map   = {v.name: v for v in db.query(Vendor).all()}
-        
-        # ── Pre-compute F8: department shadow rates ──────────────────────────────────
-        from collections import defaultdict
-        import datetime as _dt
-        all_hist_shadows  = db.query(ShadowPurchase).all()
-        dept_total_count  = defaultdict(int)
-        dept_shadow_count = defaultdict(int)
-        txn_dept_lookup   = {t.id: t.department for t in transactions}
-        for t in transactions:
-            dept_total_count[t.department] += 1
-        for s in all_hist_shadows:
-            dept = txn_dept_lookup.get(s.transaction_id)
-            if dept:
-                dept_shadow_count[dept] += 1
-        dept_shadow_rate = {
-            dept: round(dept_shadow_count[dept] / max(dept_total_count[dept], 1), 4)
-            for dept in dept_total_count
-        }
-
-        # ── Pre-compute F10: recurring vendors ──────────────────────────────────────
-        cutoff_30d = (_dt.date.today() - _dt.timedelta(days=30)).isoformat()
-        vendor_30d_count = defaultdict(int)
-        for t in transactions:
-            if str(t.date) >= cutoff_30d:
-                vendor_30d_count[t.vendor] += 1
-        recurring_vendors = {v for v, cnt in vendor_30d_count.items() if cnt >= 3}
-
-        all_features  = []
-        for t in transactions:
-            vi = vendors_map.get(t.vendor)
-            vendor_info = {
-                "risk_level": vi.risk_level,
-                "approved":   vi.approved,
-                "avg_order":  float(vi.avg_order or 0),
-            } if vi else None
-            features = shadow_ai.ingestion.extract_transaction_features(
-                {
-                    "date":            t.date,
-                    "amount":          t.amount,
-                    "payment_type":    t.payment_type,
-                    "card_holder":     t.card_holder,
-                    "dept_risk_score": dept_shadow_rate.get(t.department, 0.5),
-                    "is_recurring":    1.0 if t.vendor in recurring_vendors else 0.0,
-                },
-                vendor_info
+            scheduler.reschedule_job(
+                "automation_cycle",
+                trigger="interval",
+                minutes=max(1, req.scan_interval_minutes)
             )
-            all_features.append(features)
-
-        # Feedback-aware retraining: separate confirmed shadows vs false positives
-        confirmed_shadows = db.query(ShadowPurchase).filter(ShadowPurchase.confirmed_shadow == True).all()
-        false_positives   = db.query(ShadowPurchase).filter(ShadowPurchase.false_positive  == True).all()
-
-        confirmed_features = []
-        fp_features        = []
-
-        for s in confirmed_shadows:
-            txn = db.query(Transaction).filter(Transaction.id == s.transaction_id).first()
-            if txn:
-                vi = vendors_map.get(txn.vendor)
-                vendor_info = {
-                    "risk_level": vi.risk_level,
-                    "approved":   vi.approved,
-                    "avg_order":  float(vi.avg_order or 0),
-                } if vi else None
-                confirmed_features.append(
-                    shadow_ai.ingestion.extract_transaction_features(
-                        {
-                            "date":            txn.date,
-                            "amount":          txn.amount,
-                            "payment_type":    txn.payment_type,
-                            "card_holder":     txn.card_holder,
-                            "dept_risk_score": dept_shadow_rate.get(txn.department, 0.5),
-                            "is_recurring":    1.0 if txn.vendor in recurring_vendors else 0.0,
-                        },
-                        vendor_info
-                    )
-                )
-
-        for s in false_positives:
-            txn = db.query(Transaction).filter(Transaction.id == s.transaction_id).first()
-            if txn:
-                vi = vendors_map.get(txn.vendor)
-                vendor_info = {
-                    "risk_level": vi.risk_level,
-                    "approved":   vi.approved,
-                    "avg_order":  float(vi.avg_order or 0),
-                } if vi else None
-                fp_features.append(
-                    shadow_ai.ingestion.extract_transaction_features(
-                        {
-                            "date":            txn.date,
-                            "amount":          txn.amount,
-                            "payment_type":    txn.payment_type,
-                            "card_holder":     txn.card_holder,
-                            "dept_risk_score": dept_shadow_rate.get(txn.department, 0.5),
-                            "is_recurring":    1.0 if txn.vendor in recurring_vendors else 0.0,
-                        },
-                        vendor_info
-                    )
-                )
-
-        if confirmed_features or fp_features:
-            # Feedback-aware path: oversample FP corrections, calibrate contamination
-            result = shadow_ai.retrain_from_feedback(confirmed_features, fp_features)
-            mode = "feedback-aware"
-        else:
-            # No labeled feedback yet — plain fit on all transactions
-            shadow_ai.fit_anomaly_detector(all_features)
-            result = {"samples_used": len(all_features), "contamination": 0.20}
-            mode = "baseline"
-
-        _log_event(db, "ml_retrain", details=f"Retrained ({mode}) on {len(all_features)} samples; "
-                   f"{len(confirmed_features)} confirmed, {len(fp_features)} FP")
-
-        await manager.broadcast({
-            "type": "ml_retrained",
-            "data": {
-                "samples": len(all_features),
-                "mode": mode,
-                "confirmed": len(confirmed_features),
-                "false_positives": len(fp_features),
-                "timestamp": datetime.datetime.now().isoformat(),
-            }
-        })
-
-        return {
-            "status":   "success",
-            "mode":     mode,
-            "message":  f"Model retrained ({mode}) on {len(all_features)} transactions "
-                        f"({len(confirmed_features)} confirmed, {len(fp_features)} FP corrections)",
-            "fitted":   shadow_ai._fitted,
-            "timestamp": datetime.datetime.now().isoformat(),
-        }
-    except Exception as e:
-        logger.error(f"[ML Retrain] Failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ─── ADVANCED DIFFERENTIATOR 3: UI TELEMETRY & RISK ANALYTICS ────────────────
-
-@app.get("/api/telemetry/risk-heatmap")
-def get_risk_heatmap(db: Session = Depends(get_db), user: str = Depends(get_current_user)):
-    """
-    Returns a department × payment-type risk heatmap matrix.
-    Aggregates shadow counts and average risk scores per cell.
-    Used for frontend telemetry heat-map widget.
-    """
-    shadows      = db.query(ShadowPurchase).all()
-    transactions = {t.id: t for t in db.query(Transaction).all()}
-
-    departments  = set()
-    payment_types = ["Invoice", "Corporate Card", "Expense Claim"]
-    cell_data: dict[tuple, dict] = defaultdict(lambda: {"count": 0, "total_risk": 0.0})
-
-    for s in shadows:
-        txn = transactions.get(s.transaction_id)
-        if not txn:
-            continue
-        dept  = txn.department or "Unknown"
-        ptype = txn.payment_type or "Unknown"
-        departments.add(dept)
-        cell_data[(dept, ptype)]["count"]      += 1
-        cell_data[(dept, ptype)]["total_risk"] += float(s.risk_score or 0)
-
-    dept_list = sorted(departments)
-
-    matrix = []
-    for dept in dept_list:
-        row = {"department": dept, "cells": []}
-        for ptype in payment_types:
-            cd = cell_data.get((dept, ptype), {"count": 0, "total_risk": 0.0})
-            avg_risk = round(cd["total_risk"] / max(1, cd["count"]), 3)
-            row["cells"].append({
-                "payment_type": ptype,
-                "count":        cd["count"],
-                "avg_risk":     avg_risk,
-                "intensity":    min(1.0, avg_risk),
-            })
-        matrix.append(row)
-
-    return {
-        "departments":  dept_list,
-        "payment_types": payment_types,
-        "matrix":       matrix,
-        "generated_at": datetime.datetime.now().isoformat(),
-    }
-
-
-@app.get("/api/telemetry/vendor-trust-timeline")
-def get_vendor_trust_timeline(
-    vendor_name: Optional[str] = None,
-    db: Session = Depends(get_db),
-    user: str = Depends(get_current_user)
-):
-    """
-    Returns trust score history for one or all vendors.
-    Synthesized from AuditLog events + recalibration jobs.
-    """
-    vendors = db.query(Vendor).all()
-    if vendor_name:
-        vendors = [v for v in vendors if v.name == vendor_name]
-
-    result = []
-    for v in vendors[:15]:  # cap at 15 vendors for UI performance
-        # Simulate trust timeline from base score with noise (real system would read history table)
-        base = float(v.trust_score or 50.0)
-        timeline = []
-        score = max(10.0, base - 20.0)
-        for day_offset in range(14, -1, -1):
-            d = (datetime.date.today() - datetime.timedelta(days=day_offset)).isoformat()
-            score = round(min(100.0, max(0.0, score + (2.0 if v.approved else -1.0) + (random.uniform(-3, 3)))), 1)
-            timeline.append({"date": d, "score": score})
-        # Anchor last value to current trust score
-        if timeline:
-            timeline[-1]["score"] = round(base, 1)
-
-        result.append({
-            "vendor_name": v.name,
-            "current_trust": round(base, 1),
-            "risk_level":    v.risk_level,
-            "approved":      v.approved,
-            "timeline":      timeline,
-        })
-
-    return {"vendors": result, "generated_at": datetime.datetime.now().isoformat()}
-
-
-@app.get("/api/telemetry/shadow-velocity")
-def get_shadow_velocity(db: Session = Depends(get_db), user: str = Depends(get_current_user)):
-    """
-    Returns shadow purchase velocity: counts per hour-of-day and day-of-week.
-    Powers the 24h pattern radar chart in the UI.
-    """
-    shadows      = db.query(ShadowPurchase).all()
-    transactions = {t.id: t for t in db.query(Transaction).all()}
-
-    hourly:  dict[int, int] = defaultdict(int)
-    weekday: dict[int, int] = defaultdict(int)
-    dept_velocity: dict[str, int] = defaultdict(int)
-
-    for s in shadows:
-        txn = transactions.get(s.transaction_id)
-        if not txn or not txn.date:
-            continue
-        try:
-            dt = datetime.datetime.strptime(txn.date[:19], "%Y-%m-%d %H:%M:%S")
-            hourly[dt.hour]     += 1
-            weekday[dt.weekday()] += 1
-            dept_velocity[txn.department or "Unknown"] += 1
-        except ValueError:
-            pass
-
-    weekday_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-
-    return {
-        "hourly": [{"hour": h, "label": f"{h:02d}:00", "count": hourly[h]} for h in range(24)],
-        "weekly": [{"day": weekday_names[d], "count": weekday[d]} for d in range(7)],
-        "by_department": [
-            {"department": dept, "count": cnt}
-            for dept, cnt in sorted(dept_velocity.items(), key=lambda x: -x[1])[:10]
-        ],
-        "peak_hour":    max(hourly, key=hourly.get, default=0),
-        "peak_weekday": weekday_names[max(weekday, key=weekday.get, default=0)],
-        "generated_at": datetime.datetime.now().isoformat(),
-    }
-
-
-@app.get("/api/telemetry/summary")
-def get_telemetry_summary(db: Session = Depends(get_db), user: str = Depends(get_current_user)):
-    """
-    Single consolidated telemetry summary for the Analytics Intelligence tab.
-    Aggregates key health indicators from all telemetry sub-systems.
-    """
-    total_shadows   = db.query(ShadowPurchase).count()
-    confirmed       = db.query(ShadowPurchase).filter(ShadowPurchase.confirmed_shadow == True).count()
-    false_positives = db.query(ShadowPurchase).filter(ShadowPurchase.false_positive  == True).count()
-    vendors_count   = db.query(Vendor).count()
-    unapproved      = db.query(Vendor).filter(Vendor.approved == False).count()
-    total_feedback  = db.query(UserFeedback).count()
-
-    precision     = confirmed / max(1, confirmed + false_positives)
-    fp_rate       = false_positives / max(1, total_shadows)
-    model_health  = "Excellent" if precision > 0.8 else "Good" if precision > 0.6 else "Needs Attention"
-
-    # Recent 24h shadow count
-    yesterday = (datetime.datetime.now() - datetime.timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
-    recent_shadows = db.query(ShadowPurchase).filter(ShadowPurchase.detected_at >= yesterday).count()
-
-    return {
-        "model_health":    model_health,
-        "precision":       round(precision, 3),
-        "fp_rate":         round(fp_rate, 3),
-        "total_shadows":   total_shadows,
-        "confirmed":       confirmed,
-        "false_positives": false_positives,
-        "shadows_24h":     recent_shadows,
-        "vendors_total":   vendors_count,
-        "vendors_unapproved": unapproved,
-        "total_feedback":  total_feedback,
-        "ai_fitted":       shadow_ai._fitted,
-        "global_risk_offset": round(shadow_ai._feedback_adjustments.get("_global", 0.0), 4),
-        "feedback_count":  shadow_ai._feedback_count,
-        "generated_at":    datetime.datetime.now().isoformat(),
-    }
-
-# ==============================================================================
-# B3: Critical Alert Functions (Email + Slack)
-# ==============================================================================
-
-async def send_critical_alert(shadow: dict, txn: dict):
-    """
-    Send email alert for HIGH/CRITICAL risk shadow purchases.
-    Configure via environment variables:
-      ALERT_SMTP_HOST, ALERT_SMTP_PORT, ALERT_EMAIL_USER, ALERT_EMAIL_PASS, ALERT_EMAIL_TO
-    """
-    smtp_host = os.environ.get("ALERT_SMTP_HOST", "smtp.gmail.com")
-    smtp_port = int(os.environ.get("ALERT_SMTP_PORT", "587"))
-    smtp_user = os.environ.get("ALERT_EMAIL_USER", "")
-    smtp_pass = os.environ.get("ALERT_EMAIL_PASS", "")
-    alert_to  = os.environ.get("ALERT_EMAIL_TO", "")
-
-    if not all([smtp_user, smtp_pass, alert_to]):
-        logger.debug("[Alert] Email not configured — skipping")
-        return  # Email not configured — skip silently
-
-    subject = (
-        f"[CRITICAL ALERT] Shadow Purchase Detected — "
-        f"${txn.get('amount', 0):,.0f} from {txn.get('vendor', 'Unknown')}"
-    )
-    body = f"""
-SHADOW SYNC — CRITICAL PROCUREMENT ALERT
-
-Detection Time: {shadow.get('detected_at', 'N/A')}
-Vendor:         {txn.get('vendor', 'Unknown')}
-Amount:         ${txn.get('amount', 0):,.2f}
-Department:     {txn.get('department', 'Unknown')}
-Risk Score:     {shadow.get('risk_score', 0):.2f} / 1.00
-Priority:       {shadow.get('priority', 'High')}
-
-Risk Factors:
-{shadow.get('reason', 'No factors available')}
-
-Action Required: Review at http://localhost:8000 → Priority Queue → Shadow #{shadow.get('id', '?')}
-
-This is an automated alert from ShadowSync Detection Engine.
-    """
-    msg = MIMEMultipart()
-    msg["From"] = smtp_user
-    msg["To"] = alert_to
-    msg["Subject"] = subject
-    msg.attach(MIMEText(body, "plain"))
-
-    try:
-        with smtplib.SMTP(smtp_host, smtp_port) as server:
-            server.starttls()
-            server.login(smtp_user, smtp_pass)
-            server.send_message(msg)
-        logger.info(f"[Alert] Email sent to {alert_to} for shadow #{shadow.get('id')}")
-    except Exception as e:
-        logger.warning(f"[Alert] Email failed: {e}")
-
-
-async def send_slack_alert(shadow: dict, txn: dict):
-    """
-    Send Slack webhook notification for HIGH/CRITICAL shadows.
-    Set SLACK_WEBHOOK_URL in environment.
-    """
-    import httpx
-    webhook_url = os.environ.get("SLACK_WEBHOOK_URL", "")
-    if not webhook_url:
-        logger.debug("[Alert] SLACK_WEBHOOK_URL not set — skipping")
-        return
-
-    risk_score = shadow.get("risk_score", 0)
-    risk_emoji = "🔴" if risk_score > 0.6 else "🟡"
-    payload = {
-        "text": f"{risk_emoji} *SHADOW PURCHASE DETECTED*",
-        "blocks": [
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": (
-                        f"{risk_emoji} *Shadow Purchase Alert*\n"
-                        f"*Vendor:* {txn.get('vendor', 'Unknown')}\n"
-                        f"*Amount:* ${txn.get('amount', 0):,.2f}\n"
-                        f"*Risk Score:* {risk_score:.2f}\n"
-                        f"*Department:* {txn.get('department', 'Unknown')}\n"
-                        f"*Reason:* {str(shadow.get('reason', ''))[:200]}..."
-                    )
-                }
-            }
-        ]
-    }
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.post(webhook_url, json=payload)
-        logger.info(f"[Alert] Slack notification sent for shadow #{shadow.get('id')}")
-    except Exception as e:
-        logger.warning(f"[Alert] Slack failed: {e}")
-
-
-# ==============================================================================
-# B1: /api/admin/retrain — Retrain Isolation Forest from Accumulated Feedback
-# ==============================================================================
-
-def _txn_to_features(db: Session, shadow_id: int) -> dict:
-    """
-    Reconstruct feature dict from a shadow purchase's linked transaction.
-    Used by the retrain endpoint to rebuild training vectors from feedback.
-    """
-    try:
-        shadow = db.query(ShadowPurchase).filter(ShadowPurchase.id == shadow_id).first()
-        if not shadow:
-            return None
-        txn = db.query(Transaction).filter(Transaction.id == shadow.transaction_id).first()
-        if not txn:
-            return None
-        vendor = db.query(Vendor).filter(Vendor.name == txn.vendor).first()
-        vendor_info = None
-        if vendor:
-            vendor_info = {
-                "risk_level": vendor.risk_level,
-                "approved": vendor.approved,
-                "avg_order": vendor.avg_order,
-            }
-        return shadow_ai.ingestion.extract_transaction_features(
-            {"date": txn.date, "amount": txn.amount,
-             "payment_type": txn.payment_type, "card_holder": txn.card_holder,
-             "department": txn.department},
-            vendor_info
-        )
-    except Exception as e:
-        logger.warning(f"[Retrain] Could not build features for shadow {shadow_id}: {e}")
-        return None
-
-
-@app.post("/api/admin/retrain")
-async def trigger_retrain(
-    db: Session = Depends(get_db),
-    user: str = Depends(require_permission("retrain"))
-):
-    """
-    Admin endpoint: retrain Isolation Forest ML model from accumulated human feedback.
-    Call after every 10+ corrections or on a daily schedule.
-    Requires 'admin' role (B4 RBAC enforced).
-    """
-    # Pull confirmed shadows and false positives from the shadow_purchases table
-    confirmed = db.query(ShadowPurchase).filter(
-        ShadowPurchase.reviewer_verdict == "confirmed_shadow"
-    ).all()
-    false_pos = db.query(ShadowPurchase).filter(
-        ShadowPurchase.reviewer_verdict == "false_positive"
-    ).all()
-
-    confirmed_features = [_txn_to_features(db, s.id) for s in confirmed]
-    fp_features        = [_txn_to_features(db, s.id) for s in false_pos]
-
-    # Filter out None results (missing transactions)
-    confirmed_features = [f for f in confirmed_features if f]
-    fp_features        = [f for f in fp_features if f]
-
-    result = shadow_ai.retrain_from_feedback(confirmed_features, fp_features)
-    _log_event(db, "MODEL_RETRAIN", None,
-               f"Retrained: {result}, triggered by {user}")
-    return {"status": "retrained", **result}
-
-
-# ==============================================================================
-# B8: Vendor Self-Service Portal
-# ==============================================================================
-
-@app.get("/api/vendor-portal/{vendor_token}/status")
-async def vendor_portal_status(vendor_token: str, db: Session = Depends(get_db)):
-    """
-    B8: Vendor looks up their shadow purchase flags using a unique portal token.
-    Shows: number of flagged transactions, trust score, required compliance docs.
-    No authentication required — the token IS the credential.
-    """
-    vendor = db.query(Vendor).filter(Vendor.portal_token == vendor_token).first()
-    if not vendor:
-        raise HTTPException(status_code=404, detail="Vendor token invalid or not found")
-
-    shadows = (
-        db.query(ShadowPurchase)
-        .join(Transaction, ShadowPurchase.transaction_id == Transaction.id)
-        .filter(
-            Transaction.vendor == vendor.name,
-            ShadowPurchase.status == "Pending"
-        ).all()
-    )
-
-    flags = []
-    for s in shadows:
-        txn = db.query(Transaction).filter(Transaction.id == s.transaction_id).first()
-        if txn:
-            flags.append({
-                "id": s.id,
-                "amount": txn.amount,
-                "date": txn.date,
-                "description": txn.description,
-            })
-
-    return {
-        "vendor_name": vendor.name,
-        "vendor_id": vendor.id,
-        "trust_score": round(vendor.trust_score or 50.0, 1),
-        "risk_level": vendor.risk_level,
-        "open_flags": len(flags),
-        "required_action": "Submit purchase justification for all flagged transactions" if flags else "No pending flags",
-        "compliance_docs_needed": [
-            "Invoice copy",
-            "Business justification",
-            "Approver signature",
-        ],
-        "flags": flags,
-    }
-
-
-class VendorJustificationRequest(BaseModel):
-    justification: str
-    contact_email: Optional[str] = None
-
-
-@app.post("/api/vendor-portal/{vendor_token}/respond/{shadow_id}")
-async def vendor_portal_respond(
-    vendor_token: str,
-    shadow_id: int,
-    body: VendorJustificationRequest,
-    db: Session = Depends(get_db)
-):
-    """
-    B8: Vendor submits a justification for a flagged shadow purchase.
-    The justification is stored and notifies the procurement team queue.
-    """
-    vendor = db.query(Vendor).filter(Vendor.portal_token == vendor_token).first()
-    if not vendor:
-        raise HTTPException(status_code=404, detail="Vendor token invalid")
-
-    shadow = db.query(ShadowPurchase).filter(ShadowPurchase.id == shadow_id).first()
-    if not shadow:
-        raise HTTPException(status_code=404, detail="Shadow purchase not found")
-
-    # Store justification in the reason field (prefixed for clarity)
-    existing_reason = shadow.reason or ""
-    shadow.reason = f"[VENDOR RESPONSE: {body.justification[:500]}] | " + existing_reason
-    shadow.needs_review = True  # Force analyst review
-    db.commit()
-
-    _log_event(db, "VENDOR_JUSTIFICATION_SUBMITTED", str(shadow_id),
-               f"Vendor {vendor.name} submitted: {body.justification[:200]}")
-
-    return {
-        "status": "submitted",
-        "message": "Justification received. Procurement team will review within 48 hours.",
-        "shadow_id": shadow_id,
-        "vendor": vendor.name,
-    }
-
-
-# ==============================================================================
-# B9: Historical Trend Analytics
-# ==============================================================================
-
-@app.get("/api/analytics/trend-report")
-async def get_trend_report(
-    days: int = 30,
-    db: Session = Depends(get_db),
-    user: str = Depends(get_current_user)
-):
-    """
-    B9: Week-over-week shadow rate trends for executive reporting.
-    Key supply chain KPI: is our shadow rate improving or worsening?
-    """
-    trend_data = []
-    today = datetime.date.today()
-
-    weeks = max(1, days // 7)
-    for week_offset in range(weeks):
-        week_start = today - datetime.timedelta(weeks=week_offset + 1)
-        week_end   = today - datetime.timedelta(weeks=week_offset)
-
-        week_start_str = week_start.isoformat()
-        week_end_str   = week_end.isoformat()
-
-        total_txns = db.query(Transaction).filter(
-            Transaction.date >= week_start_str,
-            Transaction.date <  week_end_str
-        ).count()
-
-        shadow_txns = db.query(Transaction).filter(
-            Transaction.date >= week_start_str,
-            Transaction.date <  week_end_str,
-            Transaction.is_shadow == True
-        ).count()
-
-        shadow_rate = shadow_txns / total_txns if total_txns > 0 else 0.0
-
-        trend_data.append({
-            "week": week_start_str,
-            "total_transactions": total_txns,
-            "shadow_count": shadow_txns,
-            "shadow_rate": round(shadow_rate * 100, 1),
-            "compliance_rate": round((1 - shadow_rate) * 100, 1),
-        })
-
-    # Calculate trend direction (compare earliest vs latest week)
-    trend_direction = "insufficient_data"
-    rate_change = 0.0
-    if len(trend_data) >= 2:
-        rate_change = trend_data[0]["shadow_rate"] - trend_data[-1]["shadow_rate"]
-        trend_direction = "improving" if rate_change < 0 else "worsening"
-
-    current_rate = trend_data[0]["shadow_rate"] if trend_data else 0.0
-
-    return {
-        "period_days": days,
-        "trend_data": trend_data,
-        "trend_direction": trend_direction,
-        "current_shadow_rate": current_rate,
-        "summary": (
-            f"Shadow rate has {trend_direction} by "
-            f"{abs(rate_change):.1f}% over {days} days"
-        ),
-    }
-
-
-# ==============================================================================
-# B7: Currency Info Endpoint
-# ==============================================================================
-
-@app.get("/api/currencies")
-async def get_supported_currencies(user: str = Depends(get_current_user)):
-    """B7: Return supported currencies and current exchange rates (USD base)."""
-    return {
-        "base_currency": "USD",
-        "rates": EXCHANGE_RATES,
-        "note": "All ML risk scoring uses USD-normalized amounts for cross-currency fairness.",
-    }
-
-
-# ==============================================================================
-# F1: CSV / Excel Import Endpoint
-# ==============================================================================
-
-import pandas as pd
-import uuid as _uuid
-
-COLUMN_MAP = {
-    "vendor":       ["vendor", "supplier", "vendor_name", "supplier_name"],
-    "amount":       ["amount", "total", "value", "cost", "price"],
-    "date":         ["date", "transaction_date", "txn_date", "invoice_date"],
-    "department":   ["department", "dept", "cost_center", "division"],
-    "payment_type": ["payment_type", "pay_type", "method", "payment_method"],
-    "description":  ["description", "desc", "notes", "memo"],
-    "currency":     ["currency", "ccy", "currency_code"],
-}
-
-def _auto_map_columns(df: pd.DataFrame) -> dict:
-    """Map canonical field names to actual DataFrame column names (case-insensitive)."""
-    mapping = {}
-    cols_lower = {c.lower().strip(): c for c in df.columns}
-    for field, aliases in COLUMN_MAP.items():
-        for alias in aliases:
-            if alias in cols_lower:
-                mapping[field] = cols_lower[alias]
-                break
-    return mapping
-
-
-@app.post("/api/import/csv")
-async def import_csv(
-    file: UploadFile,
-    db: Session = Depends(get_db),
-    user: str = Depends(get_current_user)
-):
-    """
-    F1: Import transactions from CSV or Excel (.xlsx) file.
-    - Auto-maps column names (supports vendor/supplier, amount/total/cost, etc.)
-    - Validates required columns before committing
-    - Runs detection in batch AFTER all rows are committed (prevents timeouts)
-    - Returns: {imported, shadows_detected, errors, unmapped_columns}
-    """
-    content = await file.read()
-    filename = file.filename or ""
-
-    try:
-        if filename.lower().endswith(".xlsx") or filename.lower().endswith(".xls"):
-            df = pd.read_excel(io.BytesIO(content))
-        else:
-            df = pd.read_csv(io.BytesIO(content))
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Could not parse file: {e}")
-
-    col_map = _auto_map_columns(df)
-    required = ["vendor", "amount", "date"]
-    missing  = [f for f in required if f not in col_map]
-    if missing:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Missing required columns: {missing}. Found: {list(df.columns)}"
-        )
-
-    imported, errors, new_txn_ids = 0, [], []
-
-    for i, row in df.iterrows():
-        try:
-            amount_raw = row[col_map["amount"]]
-            # Strip currency symbols if present
-            if isinstance(amount_raw, str):
-                amount_raw = amount_raw.replace(",", "").replace("$", "").strip()
-            amount = float(amount_raw)
-
-            currency = str(row[col_map["currency"]]).strip().upper() if "currency" in col_map else "USD"
-            amount_usd = normalize_to_usd(amount, currency)
-
-            txn = Transaction(
-                id           = f"IMP-{_uuid.uuid4().hex[:10].upper()}",
-                vendor       = str(row[col_map["vendor"]]).strip(),
-                amount       = amount,
-                date         = str(row[col_map["date"]]).strip()[:10],
-                department   = str(row.get(col_map.get("department", "__MISSING__"), "Unknown")).strip(),
-                payment_type = str(row.get(col_map.get("payment_type", "__MISSING__"), "Invoice")).strip(),
-                description  = str(row.get(col_map.get("description", "__MISSING__"), "Imported")).strip(),
-                currency     = currency,
-                amount_usd   = amount_usd,
-                exchange_rate= EXCHANGE_RATES.get(currency, 1.0),
-                is_shadow    = False,
-            )
-            db.add(txn)
-            db.flush()
-            new_txn_ids.append(txn.id)
-            imported += 1
+            logger.info(f"[Automation] Rescheduled cycle to {req.scan_interval_minutes} minutes.")
         except Exception as e:
-            errors.append({"row": int(i) + 2, "error": str(e)})
-
-    db.commit()
-
-    # Batch detection — run ONCE after commit, not per-row
-    shadows_detected = 0
-    try:
-        detection_result = run_detection(db)
-        shadows_detected = detection_result.get("new_shadows", 0)
-    except Exception as e:
-        logger.warning(f"[F1] Post-import detection error: {e}")
-
-    _log_event(db, "CSV_IMPORT", None,
-               f"Imported {imported} rows from {filename}, detected {shadows_detected} shadows")
-
-    return {
-        "imported":          imported,
-        "shadows_detected":  shadows_detected,
-        "errors":            errors[:50],           # cap error list
-        "error_count":       len(errors),
-        "unmapped_columns":  [c for c in df.columns if c not in col_map.values()],
-        "filename":          filename,
-    }
-
-
-# ==============================================================================
-# F4: Predictive Department Risk
-# ==============================================================================
-
-@app.get("/api/analytics/dept-risk")
-async def dept_risk_endpoint(
-    db: Session = Depends(get_db),
-    user: str = Depends(get_current_user)
-):
-    """
-    F4: Returns predicted shadow purchase risk score per department.
-    Departments with fewer than 10 transactions are excluded (insufficient data).
-    Sorted highest-risk first.
-    """
-    depts = [
-        r[0] for r in
-        db.query(Transaction.department).filter(
-            Transaction.department.isnot(None)
-        ).distinct().all()
-    ]
-    results = [predict_department_risk(db, d) for d in depts if d]
-    results = [r for r in results if r["predicted_risk"] is not None]
-    results.sort(key=lambda x: x["predicted_risk"], reverse=True)
-    return {
-        "departments": results,
-        "high_risk_count": sum(1 for r in results if r["predicted_risk"] > 0.5),
-        "generated_at": datetime.datetime.now().isoformat(),
-    }
-
-
-# ==============================================================================
-# F5: Supplier Network Graph
-# ==============================================================================
-
-@app.get("/api/supplier-network")
-async def get_supplier_network(
-    db: Session = Depends(get_db),
-    user: str = Depends(get_current_user)
-):
-    """
-    F5: Returns the full supply chain network graph with tier classification
-    and disruption risk scores per vendor.
-    Sorted by disruption_score descending (most critical vendors first).
-    """
-    graph = supplier_network_graph.build(db)
-    sorted_vendors = sorted(
-        graph.items(),
-        key=lambda x: x[1]["disruption_score"],
-        reverse=True
-    )
-    critical_vendors = [v for v in sorted_vendors if v[1]["disruption_score"] > 0.6]
-    return {
-        "vendor_count":      len(graph),
-        "critical_count":    len(critical_vendors),
-        "vendors":           [{"name": k, **v} for k, v in sorted_vendors],
-        "generated_at":      datetime.datetime.now().isoformat(),
-    }
-
-
-# ==============================================================================
-# F6: NLP Contract Compliance
-# ==============================================================================
-
-class ContractUploadRequest(BaseModel):
-    contract_text: str
-
-class ComplianceCheckRequest(BaseModel):
-    txn_id: str
-
-
-@app.post("/api/vendors/{vendor_id}/upload-contract")
-async def upload_vendor_contract(
-    vendor_id: str,
-    payload: ContractUploadRequest,
-    db: Session = Depends(get_db),
-    user: str = Depends(get_current_user)
-):
-    """F6: Upload / replace the active contract text for a vendor."""
-    vendor = db.query(Vendor).filter(Vendor.id == vendor_id).first()
-    if not vendor:
-        raise HTTPException(status_code=404, detail="Vendor not found")
-
-    # Deactivate existing contracts
-    db.query(VendorContract).filter(
-        VendorContract.vendor_id == vendor_id,
-        VendorContract.active == True
-    ).update({"active": False})
-
-    contract = VendorContract(
-        vendor_id=vendor_id,
-        contract_text=payload.contract_text,
-        uploaded_at=datetime.datetime.utcnow().isoformat(),
-        active=True,
-    )
-    db.add(contract)
-    db.commit()
-    _log_event(db, "CONTRACT_UPLOADED", vendor_id, f"Contract uploaded for vendor {vendor.name}")
-    return {"status": "uploaded", "vendor_id": vendor_id, "vendor_name": vendor.name}
-
-
-@app.get("/api/vendors/{vendor_id}/contract")
-async def get_vendor_contract(
-    vendor_id: str,
-    db: Session = Depends(get_db),
-    user: str = Depends(get_current_user)
-):
-    """F6: Retrieve the active contract text for a vendor."""
-    contract = db.query(VendorContract).filter(
-        VendorContract.vendor_id == vendor_id,
-        VendorContract.active == True
-    ).first()
-    if not contract:
-        raise HTTPException(status_code=404, detail="No active contract found for this vendor")
-    return {
-        "vendor_id":    vendor_id,
-        "contract_text": contract.contract_text,
-        "uploaded_at":  contract.uploaded_at,
-    }
-
-
-@app.post("/api/vendors/{vendor_id}/check-compliance")
-async def check_vendor_compliance(
-    vendor_id: str,
-    payload: ComplianceCheckRequest,
-    db: Session = Depends(get_db),
-    user: str = Depends(get_current_user)
-):
-    """F6: Run NLP contract compliance check for a transaction against vendor's MSA."""
-    txn = db.query(Transaction).filter(Transaction.id == payload.txn_id).first()
-    if not txn:
-        raise HTTPException(status_code=404, detail="Transaction not found")
-
-    contract = db.query(VendorContract).filter(
-        VendorContract.vendor_id == vendor_id,
-        VendorContract.active == True
-    ).first()
-    contract_text = contract.contract_text if contract else ""
-
-    txn_dict = {
-        "vendor":       txn.vendor,
-        "amount":       txn.amount,
-        "date":         txn.date,
-        "payment_type": txn.payment_type,
-        "category":     txn.ai_category or "Unknown",
-    }
-    result = await check_contract_compliance(txn_dict, contract_text)
-    return {"txn_id": payload.txn_id, "vendor_id": vendor_id, **result}
-
-
-# ==============================================================================
-# F7: Digital Twin / IoT Inventory Sync
-# ==============================================================================
-
-async def _auto_raise_po_draft(item: InventoryItem, db: Session) -> PurchaseOrderDraft:
-    """
-    Create a draft PO for the procurement team to approve — prevents
-    emergency shadow purchases when stock hits reorder threshold.
-    """
-    draft = PurchaseOrderDraft(
-        vendor_id   = item.preferred_vendor_id,
-        item_name   = item.name,
-        quantity    = item.reorder_qty,
-        status      = "Draft",
-        created_at  = datetime.datetime.utcnow().isoformat(),
-        auto_raised = True,
-    )
-    db.add(draft)
-    db.flush()
-    # Audit trail
-    db.add(AuditLog(
-        action    = "AUTO_PO_DRAFT_RAISED",
-        details   = f"Stock for '{item.name}' hit reorder point {item.reorder_point}. Auto-raised PO for {item.reorder_qty} {item.unit}.",
-        user      = "SYSTEM",
-        timestamp = datetime.datetime.utcnow().isoformat(),
-        target_id = item.item_id,
-    ))
-    return draft
-
-
-@app.post("/api/inventory/sync")
-async def sync_inventory_iot(
-    payload: dict,
-    db: Session = Depends(get_db)
-):
-    """
-    F7: Receives IoT sensor payload and updates inventory levels.
-    Auto-raises a PO draft only when quantity crosses below reorder_point
-    (threshold crossing — not triggered on every sync).
-    No auth required — IoT devices use pre-shared item_id credentials.
-    Payload: {item_id, current_qty, unit?, location?}
-    """
-    item_id = payload.get("item_id")
-    if not item_id:
-        raise HTTPException(status_code=422, detail="item_id required")
-
-    item = db.query(InventoryItem).filter(InventoryItem.item_id == item_id).first()
-    if not item:
-        # Auto-register missing items dynamically, referencing base Inventory if possible
-        from database import Inventory
-        base_item = db.query(Inventory).filter((Inventory.sku == item_id) | (Inventory.id == item_id)).first()
-        
-        item = InventoryItem(
-            item_id=item_id,
-            name=base_item.name if base_item else f"Part {item_id}",
-            quantity=0,
-            reorder_point=base_item.reorder_level if base_item and base_item.reorder_level else 10,
-            reorder_qty=50,
-            location=payload.get("location") or (base_item.location if base_item else "Warehouse A")
-        )
-        db.add(item)
-        db.flush()
-
-    prev_qty      = item.quantity
-    item.quantity = float(payload.get("current_qty", item.quantity))
-    if payload.get("location"):
-        item.location = payload["location"]
-    item.last_synced = datetime.datetime.utcnow().isoformat()
-
-    po_raised = False
-    # Only raise draft when CROSSING the threshold (prev > point, now <= point)
-    if item.quantity <= item.reorder_point and prev_qty > item.reorder_point:
-        await _auto_raise_po_draft(item, db)
-        po_raised = True
-
-    db.commit()
-    return {
-        "status":          "synced",
-        "item_id":         item.item_id,
-        "item_name":       item.name,
-        "quantity":        item.quantity,
-        "reorder_point":   item.reorder_point,
-        "po_draft_raised": po_raised,
-        "synced_at":       item.last_synced,
-    }
-
-
-@app.get("/api/inventory/items")
-async def list_inventory_items(
-    db: Session = Depends(get_db),
-    user: str = Depends(get_current_user)
-):
-    """F7: List all IoT-registered inventory items and their sync status."""
-    items = db.query(InventoryItem).all()
-    return {"items": [
-        {
-            "item_id":       i.item_id,
-            "name":          i.name,
-            "quantity":      i.quantity,
-            "reorder_point": i.reorder_point,
-            "location":      i.location,
-            "last_synced":   i.last_synced,
-            "at_risk":       i.quantity <= i.reorder_point,
-        }
-        for i in items
-    ]}
-
-
-@app.get("/api/inventory/po-drafts")
-async def list_po_drafts(
-    db: Session = Depends(get_db),
-    user: str = Depends(get_current_user)
-):
-    """F7: List auto-raised PO drafts awaiting procurement approval."""
-    drafts = db.query(PurchaseOrderDraft).filter(
-        PurchaseOrderDraft.status == "Draft"
-    ).order_by(PurchaseOrderDraft.created_at.desc()).all()
-    return {"drafts": [
-        {
-            "id":          d.id,
-            "item_name":   d.item_name,
-            "quantity":    d.quantity,
-            "vendor_id":   d.vendor_id,
-            "created_at":  d.created_at,
-            "auto_raised": d.auto_raised,
-        }
-        for d in drafts
-    ]}
-
-
-# ==============================================================================
-# F11: ESG Compliance Layer
-# ==============================================================================
-
-# kg CO₂e per $1,000 of procurement spend
-# Source: GHG Protocol Scope 3 Category 1 + DEFRA 2023 GHG Conversion Factors
-CARBON_WEIGHTS = {
-    "hardware":     12.5,   "software":      0.8,
-    "services":      2.1,   "logistics":    25.4,
-    "unknown":       5.0,   "Electronics":   8.5,
-    "Manufacturing": 15.0,  "Maintenance":   6.0,
-    "IT":            3.5,   "Facilities":    5.0,
-    "Engineering":   4.0,   "Safety":        7.0,
-    "Logistics":    25.4,   "General":       5.0,
-}
-
-CARBON_METHODOLOGY_NOTE = (
-    "Carbon estimates apply GHG Protocol Scope 3 Category 1 spend-based methodology. "
-    "Intensity factors (kg CO₂e per $1,000 spend) sourced from DEFRA 2023 UK Government "
-    "GHG Conversion Factors and industry benchmarks. "
-    "Estimates are indicative; supplier-specific lifecycle data needed for precision."
-)
-
-
-def _estimate_carbon(txn) -> float:
-    """Estimate kg CO₂ for a transaction based on category and spend."""
-    category = getattr(txn, "ai_category", None) or "General"
-    weight   = CARBON_WEIGHTS.get(category, 5.0)
-    return round((float(txn.amount or 0) / 1000) * weight, 2)
-
-
-@app.get("/api/analytics/esg-report")
-async def esg_report(
-    db: Session = Depends(get_db),
-    user: str = Depends(get_current_user)
-):
-    """
-    F11: ESG Compliance Report.
-    Returns: per-department carbon footprint, vendor ESG scores sorted by rating,
-    and system-wide carbon total.
-    """
-    transactions = db.query(Transaction).all()
-    dept_carbon: dict = {}
-    for txn in transactions:
-        dept = txn.department or "Unknown"
-        dept_carbon[dept] = dept_carbon.get(dept, 0.0) + _estimate_carbon(txn)
-
-    vendors = db.query(Vendor).all()
-    vendor_esg = [
-        {
-            "name":      v.name,
-            "esg_score": getattr(v, "esg_score", 50.0),
-            "carbon_rating": getattr(v, "carbon_rating", "C"),
-            "certified": getattr(v, "sustainability_certified", False),
-            "tier":      getattr(v, "tier", 1),
-        }
-        for v in vendors
-    ]
-
-    total_carbon = sum(dept_carbon.values())
-
-    return {
-        "dept_carbon_kg_co2":  {
-            k: round(v, 2)
-            for k, v in sorted(dept_carbon.items(), key=lambda x: x[1], reverse=True)
-        },
-        "vendor_esg_scores":   sorted(vendor_esg, key=lambda x: x["esg_score"]),
-        "total_carbon_kg_co2": round(total_carbon, 2),
-        "carbon_intensity":    round(total_carbon / max(len(transactions), 1), 4),
-        "methodology_note":    CARBON_METHODOLOGY_NOTE,
-        "standard":            "GHG Protocol Scope 3 Category 1",
-        "generated_at":        datetime.datetime.now().isoformat(),
-    }
-
-
-# ==============================================================================
-# F12: SOC 2 Hardening — Encryption + Data Retention
-# ==============================================================================
-
-
-
-
-def purge_old_records(db: Session) -> int:
-    """
-    Delete resolved shadow purchases older than 7 years (SOC 2 data retention).
-    Called automatically every 30 days by APScheduler.
-    Also callable via POST /api/admin/purge-old-records.
-    """
-    cutoff = (
-        datetime.date.today() - datetime.timedelta(days=365 * 7)
-    ).isoformat()
-    deleted = db.query(ShadowPurchase).filter(
-        ShadowPurchase.status == "Resolved",
-        ShadowPurchase.detected_at < cutoff,
-    ).delete(synchronize_session=False)
-    db.commit()
-    logger.info(f"[F12] Purged {deleted} resolved shadows older than 7 years")
-    return deleted
-
-
-@app.post("/api/admin/purge-old-records")
-async def trigger_purge(
-    db: Session = Depends(get_db),
-    user: str = Depends(require_permission("configure"))
-):
-    """
-    F12: Manually trigger data retention purge (admin only).
-    Deletes resolved shadow purchases older than 7 years.
-    """
-    deleted = purge_old_records(db)
-    db.add(AuditLog(
-        action    = "DATA_PURGE",
-        details   = f"Purged {deleted} resolved shadows older than 7 years",
-        user      = user,
-        timestamp = datetime.datetime.utcnow().isoformat(),
-    ))
-    db.commit()
-    return {"deleted": deleted, "cutoff_years": 7}
-
-
-# ==============================================================================
-# F10: Mobile Reviewer Queue (stub-safe — works without Firebase)
-# ==============================================================================
-
-@app.get("/api/mobile/queue")
-async def mobile_queue(
-    db: Session = Depends(get_db),
-    user: str = Depends(get_current_user)
-):
-    """
-    F10: Returns the top 20 pending shadows sorted by risk score
-    for mobile reviewer apps.
-    """
-    shadows = (
-        db.query(ShadowPurchase)
-        .filter(ShadowPurchase.status == "Pending")
-        .order_by(ShadowPurchase.risk_score.desc())
-        .limit(20)
-        .all()
-    )
-    queue = []
-    for s in shadows:
-        txn = db.query(Transaction).filter(Transaction.id == s.transaction_id).first()
-        queue.append({
-            "id":         s.id,
-            "risk_score": s.risk_score,
-            "priority":   s.priority_score,
-            "vendor":     txn.vendor if txn else "Unknown",
-            "amount":     txn.amount if txn else 0,
-            "department": txn.department if txn else "Unknown",
-            "reason":     s.reason,
-            "detected_at": s.detected_at,
-        })
-    return {"queue": queue, "count": len(queue)}
-
-
-class MobileResolveRequest(BaseModel):
-    action: str = "Resolved"         # "Resolved" | "Dismissed"
-    resolved_by: str = "mobile_user"
-
-
-@app.post("/api/mobile/resolve/{shadow_id}")
-async def mobile_resolve(
-    shadow_id: int,
-    payload: MobileResolveRequest,
-    db: Session = Depends(get_db),
-    user: str = Depends(get_current_user)
-):
-    """
-    F10: Approve or dismiss a shadow purchase from the mobile reviewer app.
-    Logs action to audit trail. Does NOT require Firebase — works standalone.
-    """
-    shadow = db.query(ShadowPurchase).filter(ShadowPurchase.id == shadow_id).first()
-    if not shadow:
-        raise HTTPException(status_code=404, detail="Shadow purchase not found")
-
-    shadow.status      = payload.action
-    shadow.reviewer_id = payload.resolved_by
-    shadow.reviewed_at = datetime.datetime.utcnow().isoformat()
-
-    db.add(AuditLog(
-        action    = "MOBILE_RESOLVE",
-        details   = f"Shadow #{shadow_id} {payload.action.lower()} via mobile by {payload.resolved_by}",
-        user      = payload.resolved_by,
-        timestamp = datetime.datetime.utcnow().isoformat(),
-        target_id = str(shadow_id),
-    ))
-    db.commit()
-    return {"status": "ok", "shadow_id": shadow_id, "action": payload.action}
-# ─── SAP CONNECTOR ENDPOINTS ────────────────────────────────────────────────
-from connectors.sap import sap_connector
-
-@app.get("/api/connectors/sap/status")
-async def sap_status(user: str = Depends(get_current_user)):
-    """
-    Returns SAP connector mode (live or simulation) and health.
-    Exhibition judges: this endpoint proves SAP integration exists and is honest.
-    """
-    health = sap_connector.health_check()
-    return {
-        "connector":  "SAP ERP",
-        "bapi_used":  ["BAPI_PO_GETITEMS", "BAPI_INCOMINGINVOICE_GETLIST",
-                       "BAPI_GOODSMVT_GETITEMS"],
-        "mode":       sap_connector.mode,
-        "live_ready": sap_connector._live,
-        "setup_note": (
-            "Live mode: set SAP_HOST, SAP_SYSNR, SAP_CLIENT, SAP_USER, "
-            "SAP_PASSWORD + pip install pyrfc + NetWeaver RFC SDK binaries"
-            if not sap_connector._live else "Live RFC connection active"
-        ),
-        **health,
-    }
-
-
-@app.post("/api/connectors/sap/ingest")
-async def sap_ingest(
-    db: Session = Depends(get_db),
-    user: str = Depends(get_current_user)
-):
-    """
-    Pull POs and invoices from SAP (live or simulation) and run them through
-    the detection pipeline. Returns count of new shadows found.
-    """
-    try:
-        pos      = sap_connector.fetch_purchase_orders()
-        invoices = sap_connector.fetch_invoices()
-        grs      = sap_connector.fetch_goods_receipts()
-
-        imported   = 0
-        new_shadow = 0
-
-        for inv in invoices:
-            if not inv.get("HAS_PO"):
-                # Invoice with no matching PO = shadow candidate
-                # Create a transaction record and run detection
-                vendor_name = f"SAP-VENDOR-{inv.get('LIFNR', 'UNKNOWN')}"
-                amount      = float(inv.get("WRBTR", 0))
-                if amount > 0:
-                    txn = Transaction(
-                        date        = datetime.datetime.today().strftime("%Y-%m-%d"),
-                        vendor      = vendor_name,
-                        amount      = amount,
-                        description = f"SAP Invoice {inv.get('BELNR')} — no PO reference",
-                        payment_type = "Invoice",
-                        department  = "SAP-IMPORT",
-                        is_shadow   = False,
-                    )
-                    db.add(txn)
-                    db.flush()
-                    imported += 1
-
-        db.commit()
-
-        return {
-            "status":          "ok",
-            "mode":            sap_connector.mode,
-            "pos_fetched":     len(pos),
-            "invoices_fetched": len(invoices),
-            "grs_fetched":     len(grs),
-            "transactions_imported": imported,
-            "message": (
-                f"Ingested {imported} SAP records via {sap_connector.mode} mode. "
-                "Run /api/detect to score new transactions."
+            logger.warn(f"[Automation] Could not reschedule job: {e}")
+
+    # Reschedule Daily Digest job if digest_time changed
+    if req.digest_time is not None and scheduler.running:
+        try:
+            dh, dm = int(req.digest_time.split(":")[0]), int(req.digest_time.split(":")[1])
+            scheduler.reschedule_job(
+                "daily_digest_job",
+                trigger="cron",
+                hour=dh,
+                minute=dm
             )
-        }
-    except Exception as e:
-        logger.error("[SAP Ingest] %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+            logger.info(f"[Daily Digest] Rescheduled digest job to {req.digest_time}.")
+        except Exception as e:
+            logger.warn(f"[Daily Digest] Could not reschedule digest job: {e}")
 
+    settings_dict = get_automation_settings_dict(db)
+    await manager.broadcast({"type": "automation_settings_updated", "data": settings_dict})
+    return {"status": "success", "settings": settings_dict}
+
+@app.post("/api/automation/run-now")
+async def trigger_automation_run_now(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Trigger an immediate automation cycle execution (manager/admin only)."""
+    result = await run_automation_cycle(trigger="manual")
+    return {
+        "status": "success",
+        "scanned": result.get("scanned", 0),
+        "drafted": result.get("drafted", 0),
+        "auto_approved": result.get("auto_approved", 0),
+        "skipped_open_po": result.get("skipped_open_po", 0),
+        "overdue": result.get("overdue", 0),
+        "summary": result.get("summary", "")
+    }
+
+@app.get("/api/automation/status")
+async def get_automation_status(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Return automation state, last run, next run, and 7-day aggregate counts."""
+    settings = get_automation_settings_dict(db)
+    last_run_rec = db.query(AutomationRun).order_by(AutomationRun.id.desc()).first()
+    last_run_dict = None
+    if last_run_rec:
+        last_run_dict = {
+            "id": last_run_rec.id,
+            "started_at": last_run_rec.started_at,
+            "trigger": last_run_rec.trigger,
+            "scanned": last_run_rec.scanned,
+            "drafted": last_run_rec.drafted,
+            "auto_approved": last_run_rec.auto_approved,
+            "overdue": last_run_rec.overdue,
+            "summary": last_run_rec.summary
+        }
+
+    # Next run time
+    next_run_str = None
+    if scheduler.running:
+        job = scheduler.get_job("automation_cycle")
+        if job and job.next_run_time:
+            next_run_str = job.next_run_time.isoformat()
+
+    # This week's counts (last 7 days)
+    seven_days_ago = (datetime.datetime.now() - datetime.timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+    week_runs = db.query(AutomationRun).filter(AutomationRun.started_at >= seven_days_ago).all()
+    this_week_counts = {
+        "scanned": sum(r.scanned for r in week_runs),
+        "drafted": sum(r.drafted for r in week_runs),
+        "auto_approved": sum(r.auto_approved for r in week_runs),
+        "overdue": week_runs[-1].overdue if week_runs else 0,
+        "runs": len(week_runs)
+    }
+
+    return {
+        "enabled": settings["auto_reorder_enabled"],
+        "last_run": last_run_dict,
+        "next_run": next_run_str,
+        "this_week_counts": this_week_counts
+    }
+
+
+# ─── Barcode & QR Label PDF Endpoints ─────────────────────────────────
+
+@app.get("/api/labels/items/pdf")
+async def export_item_labels_pdf(
+    item_ids: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    all: Optional[int] = Query(1),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager", "storekeeper"]))
+):
+    """Generate printable 3x8 PDF sheet of item QR labels with SKU, name, bin, and category."""
+    q = db.query(Inventory).filter(Inventory.is_active == True)
+    if item_ids:
+        ids = [int(x.strip()) for x in item_ids.split(",") if x.strip().isdigit()]
+        if ids:
+            q = q.filter(Inventory.id.in_(ids))
+    elif category and category.lower() != "all":
+        q = q.filter(Inventory.category == category)
+
+    items = q.order_by(Inventory.sku).all()
+    if not items:
+        raise HTTPException(status_code=404, detail="No active inventory items found for label generation.")
+
+    item_dicts = [
+        {
+            "id": it.id,
+            "sku": it.sku,
+            "name": it.name,
+            "category": it.category,
+            "location": it.location or "Central Store"
+        }
+        for it in items
+    ]
+
+    pdf_bytes = generate_item_labels_pdf(item_dicts)
+    filename = f"Anishka_Item_Labels_{datetime.date.today().isoformat()}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'}
+    )
+
+
+@app.get("/api/labels/bins/pdf")
+async def export_bin_labels_pdf(
+    bins: Optional[str] = Query(None),
+    all: Optional[int] = Query(1),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager", "storekeeper"]))
+):
+    """Generate printable 2x4 PDF sheet of bin location QR tags."""
+    bin_list = []
+    if bins:
+        bin_list = [b.strip() for b in bins.split(",") if b.strip()]
+    else:
+        locs = db.query(Inventory.location).filter(Inventory.location.isnot(None), Inventory.location != "").distinct().all()
+        bin_list = [l[0] for l in locs if l[0]]
+        if not bin_list:
+            bin_list = ["BIN-A1", "BIN-A2", "BIN-B1", "BIN-B2", "BIN-C1", "BIN-C2", "BIN-D1", "BIN-D2"]
+
+    bin_dicts = [
+        {
+            "bin": b,
+            "rack": b.split("-")[0] if "-" in b else "RACK-1",
+            "zone": "Sector-10 Central Warehouse"
+        }
+        for b in bin_list
+    ]
+
+    pdf_bytes = generate_bin_labels_pdf(bin_dicts)
+    filename = f"Anishka_Bin_Labels_{datetime.date.today().isoformat()}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'}
+    )
+
+
+# ─── Cycle Count & Physical Audit Endpoints ─────────────────────────
+
+def _cycle_count_to_dict(cc: CycleCount, db: Session) -> dict:
+    items = []
+    for it in cc.items:
+        inv = it.item or db.query(Inventory).filter(Inventory.id == it.item_id).first()
+        items.append({
+            "id": it.id,
+            "item_id": it.item_id,
+            "sku": inv.sku if inv else f"ITEM-{it.item_id}",
+            "name": inv.name if inv else "",
+            "category": inv.category if inv else "",
+            "bin_location": inv.location if inv else "Central Store",
+            "system_qty": it.system_qty,
+            "counted_qty": it.counted_qty,
+            "variance_qty": it.variance_qty,
+            "unit_cost": it.unit_cost,
+            "variance_value": it.variance_value,
+            "discrepancy_reason": it.discrepancy_reason,
+            "scanned_at": it.scanned_at
+        })
+    return {
+        "id": cc.id,
+        "count_no": cc.count_no,
+        "type": cc.type,
+        "target_name": cc.target_name,
+        "status": cc.status,
+        "created_by": cc.created_by,
+        "created_at": cc.created_at,
+        "approved_by": cc.approved_by,
+        "approved_at": cc.approved_at,
+        "approval_notes": cc.approval_notes,
+        "total_items": cc.total_items,
+        "variance_items": cc.variance_items,
+        "total_variance_value": cc.total_variance_value,
+        "total_system_qty": sum(it.system_qty for it in cc.items),
+        "total_counted_qty": sum((it.counted_qty if it.counted_qty is not None else it.system_qty) for it in cc.items),
+        "total_variance_qty": sum((it.variance_qty or 0) for it in cc.items),
+        "posted_at": cc.posted_at,
+        "items": items
+    }
+
+
+@app.get("/api/cycle-counts")
+async def list_cycle_counts(
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager", "storekeeper"]))
+):
+    """List all cycle count audit sheets."""
+    q = db.query(CycleCount)
+    if status:
+        q = q.filter(CycleCount.status == status.upper())
+    counts = q.order_by(CycleCount.id.desc()).all()
+    return [_cycle_count_to_dict(c, db) for c in counts]
+
+
+@app.post("/api/cycle-counts", status_code=201)
+async def create_cycle_count(
+    req: CycleCountCreateRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager", "storekeeper"]))
+):
+    """Generate a new cycle count audit sheet by category, bin, or full warehouse."""
+    q = db.query(Inventory).filter(Inventory.is_active == True)
+    if req.type == "CATEGORY" and req.target_name:
+        q = q.filter(Inventory.category == req.target_name)
+    elif req.type == "BIN" and req.target_name:
+        q = q.filter(Inventory.location == req.target_name)
+
+    items = q.order_by(Inventory.sku).all()
+    if not items:
+        items = db.query(Inventory).filter(Inventory.is_active == True).limit(50).all()
+
+    now_iso = datetime.datetime.now().isoformat()
+    count_no = f"CC-{datetime.date.today().year}-{random.randint(1000, 9999)}"
+
+    cc = CycleCount(
+        count_no=count_no,
+        type=req.type.upper(),
+        target_name=req.target_name or "All Warehouse",
+        status="OPEN",
+        created_by=current_user["username"],
+        created_at=now_iso,
+        approval_notes=req.notes or "",
+        total_items=len(items),
+        variance_items=0,
+        total_variance_value=0.0
+    )
+    db.add(cc)
+    db.flush()
+
+    for item in items:
+        cc_item = CycleCountItem(
+            cycle_count_id=cc.id,
+            item_id=item.id,
+            system_qty=item.quantity,
+            counted_qty=item.quantity,
+            variance_qty=0,
+            unit_cost=item.unit_cost or 0.0,
+            variance_value=0.0,
+            discrepancy_reason=None,
+            scanned_at=None
+        )
+        db.add(cc_item)
+
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="CYCLE_COUNT_CREATED",
+        user=current_user["username"],
+        target_id=count_no,
+        details=f"Created {req.type} count sheet {count_no} ({req.target_name}) with {len(items)} items."
+    ))
+    db.commit()
+    db.refresh(cc)
+    return _cycle_count_to_dict(cc, db)
+
+
+@app.get("/api/cycle-counts/{cc_id}")
+async def get_cycle_count(
+    cc_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager", "storekeeper"]))
+):
+    """Retrieve detailed count sheet with line items and variance calculations."""
+    cc = db.query(CycleCount).filter(CycleCount.id == cc_id).first()
+    if not cc:
+        raise HTTPException(status_code=404, detail="Cycle count sheet not found.")
+    return _cycle_count_to_dict(cc, db)
+
+
+@app.post("/api/cycle-counts/{cc_id}/count")
+async def update_cycle_count_items(
+    cc_id: int,
+    req: dict,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager", "storekeeper"]))
+):
+    """Update counted quantities and discrepancy reasons for items in sheet."""
+    cc = db.query(CycleCount).filter(CycleCount.id == cc_id).first()
+    if not cc:
+        raise HTTPException(status_code=404, detail="Cycle count sheet not found.")
+    if cc.status in ["APPROVED", "POSTED"]:
+        raise HTTPException(status_code=400, detail="Cannot edit an approved cycle count sheet.")
+
+    items_input = req.get("items") or req.get("counts") or []
+    item_map = {it.id: it for it in cc.items}
+
+    var_items = 0
+    total_var_val = 0.0
+
+    for inp in items_input:
+        it_id = inp.get("item_id")
+        cc_item = item_map.get(it_id)
+        if not cc_item:
+            for ci in cc.items:
+                if ci.item_id == it_id:
+                    cc_item = ci
+                    break
+
+        if cc_item:
+            counted = inp.get("counted_qty", cc_item.system_qty)
+            cc_item.counted_qty = counted
+            cc_item.variance_qty = counted - cc_item.system_qty
+            cc_item.variance_value = cc_item.variance_qty * (cc_item.unit_cost or 0.0)
+            if "discrepancy_reason" in inp:
+                cc_item.discrepancy_reason = inp["discrepancy_reason"]
+            cc_item.scanned_at = datetime.datetime.now().isoformat()
+
+    for ci in cc.items:
+        if (ci.variance_qty or 0) != 0:
+            var_items += 1
+            total_var_val += (ci.variance_value or 0.0)
+
+    cc.variance_items = var_items
+    cc.total_variance_value = total_var_val
+    db.commit()
+    db.refresh(cc)
+    return _cycle_count_to_dict(cc, db)
+
+
+@app.post("/api/cycle-counts/{cc_id}/submit")
+async def submit_cycle_count(
+    cc_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager", "storekeeper"]))
+):
+    """Submit count sheet for managerial review and approval."""
+    cc = db.query(CycleCount).filter(CycleCount.id == cc_id).first()
+    if not cc:
+        raise HTTPException(status_code=404, detail="Cycle count sheet not found.")
+    if cc.status in ["APPROVED", "POSTED"]:
+        raise HTTPException(status_code=400, detail="Sheet already approved.")
+
+    cc.status = "SUBMITTED"
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="CYCLE_COUNT_SUBMITTED",
+        user=current_user["username"],
+        target_id=cc.count_no,
+        details=f"Submitted cycle count sheet {cc.count_no} for approval. Total variance items: {cc.variance_items}."
+    ))
+    db.commit()
+    db.refresh(cc)
+    return _cycle_count_to_dict(cc, db)
+
+
+@app.post("/api/cycle-counts/{cc_id}/approve")
+async def approve_cycle_count(
+    cc_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Manager/Admin approves sheet and automatically posts physical variance adjustments to ledger."""
+    cc = db.query(CycleCount).filter(CycleCount.id == cc_id).first()
+    if not cc:
+        raise HTTPException(status_code=404, detail="Cycle count sheet not found.")
+    if cc.status in ["APPROVED", "POSTED"]:
+        return _cycle_count_to_dict(cc, db)
+
+    now_iso = datetime.datetime.now().isoformat()
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    for it in cc.items:
+        var = it.variance_qty or 0
+        if var != 0:
+            inv = it.item or db.query(Inventory).filter(Inventory.id == it.item_id).first()
+            if inv:
+                prev_qty = inv.quantity
+                inv.quantity = (it.counted_qty if it.counted_qty is not None else inv.quantity)
+                inv.last_updated = now_iso
+
+                db.add(StockMovement(
+                    item_id=inv.id,
+                    type="ADJUST",
+                    quantity=abs(var),
+                    reference=f"Cycle Count {cc.count_no}",
+                    party="Physical Audit",
+                    performed_by=f"{current_user['username']} via Cycle Count",
+                    timestamp=now_str,
+                    balance_after=inv.quantity,
+                    client_id=f"cc-{cc.id}-{it.id}"
+                ))
+
+                db.add(AuditLog(
+                    timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    action="CYCLE_COUNT_POSTED",
+                    user=current_user["username"],
+                    target_id=inv.sku,
+                    details=f"Reconciled {inv.sku} from {prev_qty} to {inv.quantity} via sheet {cc.count_no}. Reason: {it.discrepancy_reason or 'Variance'}"
+                ))
+
+    cc.status = "APPROVED"
+    cc.approved_by = current_user["username"]
+    cc.approved_at = now_iso
+    cc.posted_at = now_iso
+    db.commit()
+    db.refresh(cc)
+
+    stats = _compute_stats(db)
+    await manager.broadcast({"type": "stats_update", "data": stats})
+    return _cycle_count_to_dict(cc, db)
+
+
+@app.post("/api/cycle-counts/{cc_id}/reject")
+async def reject_cycle_count(
+    cc_id: int,
+    req: CycleCountActionRequest = CycleCountActionRequest(),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Reject cycle count sheet requiring recounts."""
+    cc = db.query(CycleCount).filter(CycleCount.id == cc_id).first()
+    if not cc:
+        raise HTTPException(status_code=404, detail="Cycle count sheet not found.")
+    if cc.status in ["APPROVED", "POSTED"]:
+        raise HTTPException(status_code=400, detail="Cannot reject already approved cycle count.")
+
+    cc.status = "REJECTED"
+    cc.approval_notes = req.reason or req.notes or "Count sheet rejected by manager"
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="CYCLE_COUNT_REJECTED",
+        user=current_user["username"],
+        target_id=cc.count_no,
+        details=f"Cycle count sheet {cc.count_no} rejected: {cc.approval_notes}"
+    ))
+    db.commit()
+    db.refresh(cc)
+    return _cycle_count_to_dict(cc, db)
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
+
+# ─── EXTRA AUTOMATION ENDPOINTS (OUTBOX, DIGEST, REORDER REVIEW, DEAD STOCK) ───
+
+@app.get("/api/outbox")
+async def get_outbox_messages(
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Retrieve queued, sent, and simulated email outbox messages."""
+    records = db.query(Outbox).order_by(Outbox.id.desc()).limit(limit).all()
+    return [{
+        "id": r.id,
+        "created_at": r.created_at,
+        "to_email": r.to_email,
+        "subject": r.subject,
+        "body": r.body,
+        "attachment_name": r.attachment_name,
+        "status": r.status,
+        "related_po": r.related_po,
+        "channel": getattr(r, "channel", "EMAIL") or "EMAIL",
+        "sender": getattr(r, "sender", "system") or "system",
+        "recipient_phone": getattr(r, "recipient_phone", "") or "",
+        "template_lang": getattr(r, "template_lang", "en") or "en",
+        "ref_type": getattr(r, "ref_type", "") or "",
+        "ref_id": getattr(r, "ref_id", "") or ""
+    } for r in records]
+
+
+@app.post("/api/outbox/{outbox_id}/resend")
+async def resend_outbox_message(
+    outbox_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Re-dispatch or re-simulate an outbox email (admin/manager only)."""
+    rec = db.query(Outbox).filter(Outbox.id == outbox_id).first()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Outbox message not found.")
+
+    smtp_host = os.environ.get("SMTP_HOST")
+    smtp_user = os.environ.get("SMTP_USER")
+    smtp_pass = os.environ.get("SMTP_PASS")
+    smtp_from = os.environ.get("SMTP_FROM")
+    has_smtp = bool(smtp_host and smtp_user and smtp_pass and smtp_from)
+
+    rec.created_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if has_smtp:
+        rec.status = "QUEUED"
+        db.commit()
+        def _bg_resend(oid, subj, body, to_addr):
+            from database import SessionLocal
+            bg_db = SessionLocal()
+            try:
+                import smtplib
+                from email.mime.text import MIMEText
+                from email.mime.multipart import MIMEMultipart
+                msg = MIMEMultipart()
+                msg["Subject"] = subj
+                msg["From"] = smtp_from
+                msg["To"] = to_addr
+                msg.attach(MIMEText(body, "plain"))
+                server = smtplib.SMTP(smtp_host, int(os.environ.get("SMTP_PORT", 587)), timeout=10)
+                server.starttls()
+                server.login(smtp_user, smtp_pass)
+                server.send_message(msg)
+                server.quit()
+                r = bg_db.query(Outbox).filter(Outbox.id == oid).first()
+                if r:
+                    r.status = "SENT"
+                    bg_db.commit()
+            except Exception:
+                r = bg_db.query(Outbox).filter(Outbox.id == oid).first()
+                if r:
+                    r.status = "FAILED"
+                    bg_db.commit()
+            finally:
+                bg_db.close()
+        import threading
+        threading.Thread(target=_bg_resend, args=(rec.id, rec.subject, rec.body, rec.to_email), daemon=True).start()
+    else:
+        rec.status = "SIMULATED"
+        db.commit()
+
+    return {"status": "success", "message": f"Outbox message {rec.id} re-processed.", "new_status": rec.status}
+
+
+@app.get("/api/digest/latest")
+async def get_latest_daily_digest(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Fetch the latest daily operations digest summary."""
+    rec = db.query(Outbox).filter(Outbox.related_po == "DAILY_DIGEST").order_by(Outbox.id.desc()).first()
+    if rec:
+        return {
+            "status": "success",
+            "date": rec.created_at[:10],
+            "created_at": rec.created_at,
+            "subject": rec.subject,
+            "body": rec.body,
+            "status_label": rec.status
+        }
+    data = generate_daily_digest(db, triggered_by="on_demand")
+    return {
+        "status": "success",
+        "date": data["date"],
+        "created_at": data["timestamp"],
+        "subject": f"Daily Inventory & Operations Digest - {data['date']}",
+        "body": data["body"],
+        "status_label": "SIMULATED"
+    }
+
+
+@app.post("/api/digest/run-now")
+async def trigger_daily_digest_now(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Generate an immediate daily operations digest (admin/manager only)."""
+    data = generate_daily_digest(db, triggered_by="manual")
+    return {"status": "success", "digest": data}
+
+
+@app.get("/api/inventory/reorder-level-suggestions")
+async def get_reorder_level_suggestions(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Review Reorder Levels:
+    Returns items where suggested reorder level differs by more than 25% from current level.
+    """
+    items = db.query(Inventory).filter(Inventory.is_active == True).all()
+    suggestions = []
+    for it in items:
+        res = compute_suggested_reorder_level(it, db)
+        if res["requires_review"]:
+            suggestions.append(res)
+    suggestions.sort(key=lambda x: abs(x["diff"]), reverse=True)
+    return {
+        "count": len(suggestions),
+        "items": suggestions
+    }
+
+
+@app.get("/api/inventory/dead-stock")
+async def get_dead_stock_endpoint(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Return dead stock items with idle days, tied up capital, and suggested recovery actions."""
+    return get_dead_stock_analysis(db)
+
+
+@app.get("/api/export/dead-stock/csv")
+async def export_dead_stock_csv(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Export dead stock analysis as CSV."""
+    data = get_dead_stock_analysis(db)
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "SKU", "Part Name", "Category", "Quantity", "Unit Cost (INR)",
+        "Tied-Up Value (INR)", "Days Inactive", "Suggested Action", "Supplier"
+    ])
+    for it in data["items"]:
+        writer.writerow([
+            it["sku"],
+            it["name"],
+            it["category"],
+            it["quantity"],
+            f"{it['unit_cost']:.2f}",
+            f"{it['tied_up_value']:.2f}",
+            it["days_idle"],
+            it["suggested_action"],
+            it["supplier_name"]
+        ])
+    output.seek(0)
+    filename = f"dead_stock_report_{datetime.date.today().isoformat()}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
+# ─── Sales Module Helpers & Serializers ───────────────────────────────
+
+def get_customer_outstanding(customer_id: int, db: Session) -> float:
+    """Compute total customer outstanding: unpaid invoices + confirmed uninvoiced orders."""
+    invoices = db.query(Invoice).filter(Invoice.customer_id == customer_id, Invoice.status != "CANCELLED").all()
+    total_invoiced = sum(inv.total for inv in invoices)
+    invoice_ids = [inv.id for inv in invoices]
+    payments = db.query(Payment).filter(Payment.invoice_id.in_(invoice_ids)).all() if invoice_ids else []
+    total_paid = sum(p.amount for p in payments)
+    outstanding_invoices = max(0.0, total_invoiced - total_paid)
+
+    uninvoiced_orders = db.query(SalesOrder).filter(
+        SalesOrder.customer_id == customer_id,
+        SalesOrder.status.in_(["CONFIRMED", "PARTIALLY_DISPATCHED", "DISPATCHED"])
+    ).all()
+    uninv_total = sum(o.grand_total for o in uninvoiced_orders if not o.invoices)
+
+    return round(outstanding_invoices + uninv_total, 2)
+
+
+def generate_next_invoice_no(db: Session) -> str:
+    """Generate Indian Financial Year invoice number e.g. ANI/2026-27/0001."""
+    now = datetime.datetime.now()
+    if now.month >= 4:
+        fy = f"{now.year}-{(now.year + 1) % 100:02d}"
+    else:
+        fy = f"{now.year - 1}-{now.year % 100:02d}"
+
+    prefix = f"ANI/{fy}/"
+    existing = db.query(Invoice.invoice_no).filter(Invoice.invoice_no.like(f"{prefix}%")).all()
+    max_seq = 0
+    for (inv_no,) in existing:
+        try:
+            seq_part = int(inv_no.split("/")[-1])
+            if seq_part > max_seq:
+                max_seq = seq_part
+        except Exception:
+            pass
+    return f"{prefix}{max_seq + 1:04d}"
+
+
+def generate_next_so_no(db: Session, is_quote: bool = False) -> str:
+    """Generate unique sequential quotation or sales order reference."""
+    now = datetime.datetime.now()
+    prefix = f"ANI-QT-{now.year}-" if is_quote else f"ANI-SO-{now.year}-"
+    existing = db.query(SalesOrder.order_no).filter(SalesOrder.order_no.like(f"{prefix}%")).all()
+    max_seq = 0
+    for (so_no,) in existing:
+        try:
+            seq_part = int(so_no.split("-")[-1])
+            if seq_part > max_seq:
+                max_seq = seq_part
+        except Exception:
+            pass
+    return f"{prefix}{max_seq + 1:04d}"
+
+
+def _customer_to_dict(c: Customer, db: Session) -> dict:
+    outstanding = get_customer_outstanding(c.id, db)
+    open_orders = db.query(SalesOrder).filter(
+        SalesOrder.customer_id == c.id,
+        SalesOrder.status.in_(["QUOTE", "CONFIRMED", "PARTIALLY_DISPATCHED", "DISPATCHED"])
+    ).count()
+    inv_count = db.query(Invoice).filter(Invoice.customer_id == c.id).count()
+    return {
+        "id": c.id,
+        "name": c.name,
+        "gstin": c.gstin or "",
+        "state": c.state,
+        "city": c.city,
+        "contact_person": c.contact_person or "",
+        "phone": c.phone or "",
+        "email": c.email or "",
+        "price_tier": c.price_tier,
+        "credit_limit": c.credit_limit,
+        "credit_days": c.credit_days,
+        "is_active": c.is_active,
+        "whatsapp_opt_out": getattr(c, "whatsapp_opt_out", False) or False,
+        "outstanding_balance": outstanding,
+        "open_orders_count": open_orders,
+        "total_invoices": inv_count
+    }
+
+
+def _sales_order_to_dict(so: SalesOrder, is_privileged: bool = False) -> dict:
+    items_out = []
+    for it in so.items:
+        line_taxable = round(it.qty * it.unit_price * (1.0 - (it.discount_pct / 100.0)), 2)
+        line_tax = round(line_taxable * (it.gst_rate / 100.0), 2)
+        item_obj = it.item
+        unit_cost = item_obj.unit_cost if item_obj else 0.0
+        line_data = {
+            "id": it.id,
+            "item_id": it.item_id,
+            "sku": item_obj.sku if item_obj else "",
+            "name": item_obj.name if item_obj else "Welding Spare",
+            "unit": item_obj.unit if item_obj else "pcs",
+            "hsn_code": getattr(item_obj, "hsn_code", "8466"),
+            "qty": it.qty,
+            "dispatched_qty": it.dispatched_qty or 0,
+            "unit_price": it.unit_price,
+            "discount_pct": it.discount_pct,
+            "gst_rate": it.gst_rate,
+            "taxable": line_taxable,
+            "tax_amount": line_tax,
+            "line_total": round(line_taxable + line_tax, 2)
+        }
+        if is_privileged:
+            margin = it.unit_price - unit_cost
+            margin_pct = round((margin / it.unit_price * 100.0), 1) if it.unit_price > 0 else 0.0
+            line_data["unit_cost"] = unit_cost
+            line_data["margin"] = round(margin, 2)
+            line_data["margin_per_unit"] = round(margin, 2)
+            line_data["margin_pct"] = margin_pct
+        items_out.append(line_data)
+
+    return {
+        "id": so.id,
+        "order_no": so.order_no,
+        "customer_id": so.customer_id,
+        "customer_name": so.customer.name if so.customer else "Customer",
+        "customer_gstin": so.customer.gstin if so.customer else "",
+        "customer_state": so.customer.state if so.customer else "Haryana",
+        "customer_city": so.customer.city if so.customer else "",
+        "status": so.status,
+        "created_by": so.created_by,
+        "created_at": so.created_at,
+        "valid_until": so.valid_until or "",
+        "notes": so.notes or "",
+        "override_reason": so.override_reason or "",
+        "total_taxable": so.total_taxable,
+        "total_tax": so.total_tax,
+        "grand_total": so.grand_total,
+        "items": items_out
+    }
+
+
+def _invoice_to_dict(inv: Invoice) -> dict:
+    payments = [
+        {"id": p.id, "amount": p.amount, "mode": p.mode, "reference": p.reference or "", "date": p.date, "recorded_by": p.recorded_by}
+        for p in inv.payments
+    ]
+    paid_sum = round(sum(p["amount"] for p in payments), 2)
+    bal_due = max(0.0, round(inv.total - paid_sum, 2))
+    return {
+        "id": inv.id,
+        "invoice_no": inv.invoice_no,
+        "order_id": inv.order_id,
+        "order_no": inv.order.order_no if inv.order else "",
+        "customer_id": inv.customer_id,
+        "customer_name": inv.customer.name if inv.customer else "Customer",
+        "customer_gstin": inv.customer.gstin if inv.customer else "",
+        "customer_state": inv.customer.state if inv.customer else "",
+        "customer_city": inv.customer.city if inv.customer else "",
+        "date": inv.date,
+        "place_of_supply": inv.place_of_supply,
+        "taxable_value": inv.taxable_value,
+        "cgst": inv.cgst,
+        "sgst": inv.sgst,
+        "igst": inv.igst,
+        "total": inv.total,
+        "status": inv.status,
+        "paid_amount": paid_sum,
+        "balance_due": bal_due,
+        "payments": payments
+    }
+
+
+# ─── Customers API Endpoints ──────────────────────────────────────────
+
+@app.get("/api/customers")
+async def get_customers(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """List all active industrial customers with outstanding balances."""
+    custs = db.query(Customer).order_by(Customer.name.asc()).all()
+    return [_customer_to_dict(c, db) for c in custs]
+
+
+@app.post("/api/customers")
+async def create_customer(
+    req: CustomerCreateRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Onboard a new industrial client (admin/manager)."""
+    if not req.name or not req.name.strip():
+        raise HTTPException(status_code=400, detail="Customer name is required.")
+
+    c = Customer(
+        name=req.name.strip(),
+        gstin=req.gstin.strip().upper() if req.gstin else None,
+        state=req.state.strip(),
+        city=req.city.strip(),
+        contact_person=req.contact_person.strip() if req.contact_person else None,
+        phone=req.phone.strip() if req.phone else None,
+        email=req.email.strip().lower() if req.email else None,
+        price_tier=req.price_tier or "Standard",
+        credit_limit=req.credit_limit if req.credit_limit is not None else 100000.0,
+        credit_days=req.credit_days if req.credit_days is not None else 30,
+        is_active=True,
+        whatsapp_opt_out=bool(req.whatsapp_opt_out) if req.whatsapp_opt_out is not None else False
+    )
+    db.add(c)
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="CUSTOMER_CREATED",
+        user=current_user["username"],
+        target_id=c.name,
+        details=f"Onboarded client '{c.name}' in {c.city}, {c.state}. Credit limit: Rs. {c.credit_limit:,.2f}."
+    ))
+    db.commit()
+    db.refresh(c)
+    d = _customer_to_dict(c, db)
+    return {**d, "customer": d}
+
+
+@app.get("/api/customers/{customer_id}")
+async def get_single_customer(
+    customer_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Retrieve detailed customer profile."""
+    c = db.query(Customer).filter(Customer.id == customer_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Customer not found.")
+    return _customer_to_dict(c, db)
+
+
+@app.put("/api/customers/{customer_id}")
+async def update_customer(
+    customer_id: int,
+    req: CustomerUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Update customer details & credit terms (admin/manager)."""
+    c = db.query(Customer).filter(Customer.id == customer_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Customer not found.")
+
+    changes = []
+    for field in ["name", "gstin", "state", "city", "contact_person", "phone", "email", "price_tier", "credit_limit", "credit_days", "is_active", "whatsapp_opt_out"]:
+        val = getattr(req, field)
+        if val is not None:
+            old = getattr(c, field)
+            setattr(c, field, val)
+            changes.append(f"{field}: {old} -> {val}")
+
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="CUSTOMER_UPDATED",
+        user=current_user["username"],
+        target_id=c.name,
+        details=f"Updated customer '{c.name}': {'; '.join(changes[:4])}"
+    ))
+    db.commit()
+    db.refresh(c)
+    return {"status": "success", "customer": _customer_to_dict(c, db)}
+
+
+@app.get("/api/customers/{customer_id}/ledger")
+async def get_customer_ledger(
+    customer_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Retrieve financial ledger of invoices (debit) and payments (credit) with running balance."""
+    c = db.query(Customer).filter(Customer.id == customer_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Customer not found.")
+
+    invoices = db.query(Invoice).filter(Invoice.customer_id == customer_id, Invoice.status != "CANCELLED").all()
+    inv_ids = [inv.id for inv in invoices]
+    payments = db.query(Payment).filter(Payment.invoice_id.in_(inv_ids)).all() if inv_ids else []
+
+    txns = []
+    for inv in invoices:
+        txns.append({
+            "type": "INVOICE",
+            "date": inv.date,
+            "ref": inv.invoice_no,
+            "reference": inv.invoice_no,
+            "details": f"Tax Invoice against order {inv.order.order_no if inv.order else 'Direct'}",
+            "debit": inv.total,
+            "credit": 0.0,
+            "status": inv.status
+        })
+
+    for p in payments:
+        inv_ref = p.invoice.invoice_no if p.invoice else ""
+        txns.append({
+            "type": "PAYMENT",
+            "date": p.date,
+            "ref": p.reference or f"PMT-{p.id}",
+            "reference": p.reference or f"PMT-{p.id}",
+            "details": f"Payment received via {p.mode} for {inv_ref}",
+            "debit": 0.0,
+            "credit": p.amount,
+            "status": "SETTLED"
+        })
+
+    txns.sort(key=lambda x: x["date"])
+
+    running_bal = 0.0
+    for t in txns:
+        running_bal += t["debit"] - t["credit"]
+        t["running_balance"] = round(running_bal, 2)
+
+    outstanding = get_customer_outstanding(customer_id, db)
+    return {
+        "customer": _customer_to_dict(c, db),
+        "credit_limit": c.credit_limit,
+        "outstanding": outstanding,
+        "outstanding_balance": outstanding,
+        "credit_utilization_pct": round(outstanding / c.credit_limit * 100, 1) if c.credit_limit > 0 else 0.0,
+        "transactions": txns
+    }
+
+
+# ─── Sales Orders & Quotations Endpoints ──────────────────────────────
+
+@app.get("/api/sales/orders")
+async def get_sales_orders(
+    status: Optional[str] = None,
+    customer_id: Optional[int] = None,
+    search: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """List quotations and sales orders. Shows line margins to manager/admin only."""
+    is_priv = current_user.get("role") in ("admin", "manager")
+    q = db.query(SalesOrder).order_by(SalesOrder.id.desc())
+    if status and status != "all":
+        q = q.filter(SalesOrder.status == status.upper())
+    if customer_id:
+        q = q.filter(SalesOrder.customer_id == customer_id)
+    if search:
+        s_fmt = f"%{search.lower()}%"
+        q = q.join(Customer).filter((func.lower(SalesOrder.order_no).like(s_fmt)) | (func.lower(Customer.name).like(s_fmt)))
+
+    orders = q.all()
+    return [_sales_order_to_dict(so, is_privileged=is_priv) for so in orders]
+
+
+@app.get("/api/sales/orders/{order_id}")
+async def get_single_sales_order(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Retrieve single sales order details."""
+    is_priv = current_user.get("role") in ("admin", "manager")
+    so = db.query(SalesOrder).filter(SalesOrder.id == order_id).first()
+    if not so:
+        raise HTTPException(status_code=404, detail="Sales Order not found.")
+    return _sales_order_to_dict(so, is_privileged=is_priv)
+
+
+@app.post("/api/sales/orders")
+async def create_sales_order(
+    req: SalesOrderCreateRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Create a Quotation or Sales Order (admin/manager)."""
+    cust = db.query(Customer).filter(Customer.id == req.customer_id).first()
+    if not cust:
+        raise HTTPException(status_code=400, detail="Customer not found.")
+
+    if not req.items:
+        raise HTTPException(status_code=400, detail="Order must include at least one item.")
+
+    if req.is_quote is not None:
+        is_quote = bool(req.is_quote)
+    elif req.status:
+        is_quote = (req.status.upper() == "QUOTE")
+    else:
+        is_quote = True
+    order_no = generate_next_so_no(db, is_quote=is_quote)
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    valid_until = req.valid_until
+    if not valid_until:
+        valid_until = (datetime.date.today() + datetime.timedelta(days=15)).isoformat()
+
+    so = SalesOrder(
+        order_no=order_no,
+        customer_id=cust.id,
+        status="QUOTE" if is_quote else "CONFIRMED",
+        created_by=current_user["username"],
+        created_at=now_str,
+        valid_until=valid_until,
+        notes=req.notes
+    )
+    db.add(so)
+    db.flush()
+
+    total_taxable = 0.0
+    total_tax = 0.0
+
+    for it_in in req.items:
+        inv_item = db.query(Inventory).filter(Inventory.id == it_in.item_id).first()
+        if not inv_item:
+            raise HTTPException(status_code=400, detail=f"Item ID {it_in.item_id} not found in inventory catalog.")
+
+        price = it_in.unit_price if it_in.unit_price is not None else (inv_item.selling_price or inv_item.unit_price or 0.0)
+        disc = it_in.discount_pct or 0.0
+        line_taxable = round(it_in.qty * price * (1.0 - (disc / 100.0)), 2)
+        gst_pct = getattr(inv_item, "gst_rate", 18.0) or 18.0
+        line_tax = round(line_taxable * (gst_pct / 100.0), 2)
+
+        total_taxable += line_taxable
+        total_tax += line_tax
+
+        # If created directly as CONFIRMED, check and reserve
+        if not is_quote:
+            avail = (inv_item.quantity or 0) - (getattr(inv_item, "reserved_qty", 0) or 0)
+            if avail < it_in.qty:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Insufficient available stock for SKU {inv_item.sku}. Available: {avail}, Requested: {it_in.qty}."
+                )
+            inv_item.reserved_qty = (inv_item.reserved_qty or 0) + it_in.qty
+
+        so_item = SalesOrderItem(
+            order_id=so.id,
+            item_id=inv_item.id,
+            qty=it_in.qty,
+            unit_price=price,
+            discount_pct=disc,
+            gst_rate=gst_pct,
+            dispatched_qty=0
+        )
+        db.add(so_item)
+
+    so.total_taxable = round(total_taxable, 2)
+    so.total_tax = round(total_tax, 2)
+    so.grand_total = round(total_taxable + total_tax, 2)
+
+    # If confirming, check credit limit
+    if not is_quote:
+        curr_out = get_customer_outstanding(cust.id, db)
+        if curr_out + so.grand_total > cust.credit_limit:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Customer credit limit exceeded. Limit: Rs. {cust.credit_limit:,.2f}, Total with order: Rs. {curr_out + so.grand_total:,.2f}. Manager override required."
+            )
+
+    action = "QUOTE_CREATED" if is_quote else "SO_CREATED"
+    db.add(AuditLog(
+        timestamp=now_str,
+        action=action,
+        user=current_user["username"],
+        target_id=so.order_no,
+        details=f"Raised {'Quotation' if is_quote else 'Sales Order'} {so.order_no} for {cust.name}. Total: Rs. {so.grand_total:,.2f}."
+    ))
+    db.commit()
+    db.refresh(so)
+    d = _sales_order_to_dict(so, is_privileged=True)
+    return {**d, "order": d}
+
+
+@app.post("/api/sales/orders/{order_id}/confirm")
+async def confirm_sales_order(
+    order_id: int,
+    req: SalesOrderConfirmRequest = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Confirm quotation into Sales Order: reserves stock & validates credit limit (admin/manager)."""
+    so = db.query(SalesOrder).filter(SalesOrder.id == order_id).first()
+    if not so:
+        raise HTTPException(status_code=404, detail="Sales Order not found.")
+
+    if so.status != "QUOTE":
+        raise HTTPException(status_code=400, detail=f"Cannot confirm order in status '{so.status}'. Must be 'QUOTE'.")
+
+    cust = so.customer
+
+    # 1. Check Credit Limit
+    curr_out = get_customer_outstanding(cust.id, db)
+    total_exposure = curr_out + so.grand_total
+    override_reason = req.override_reason if req else None
+
+    if total_exposure > cust.credit_limit:
+        if not override_reason or not override_reason.strip():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Credit limit exceeded. Customer credit limit is Rs. {cust.credit_limit:,.2f}, exposure would reach Rs. {total_exposure:,.2f}. Manager override with reason required."
+            )
+        so.override_reason = override_reason.strip()
+
+    # 2. Check stock availability for all items before reserving
+    for line in so.items:
+        inv_item = line.item
+        avail = (inv_item.quantity or 0) - (getattr(inv_item, "reserved_qty", 0) or 0)
+        if avail < line.qty:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Insufficient stock for {inv_item.sku} ({inv_item.name}). Available: {avail}, Ordered: {line.qty}."
+            )
+
+    # 3. Reserve stock
+    for line in so.items:
+        line.item.reserved_qty = (line.item.reserved_qty or 0) + line.qty
+
+    # Keep order_no unchanged (status transitions QUOTE -> CONFIRMED)
+
+    so.status = "CONFIRMED"
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    db.add(AuditLog(
+        timestamp=now_str,
+        action="SO_CONFIRMED",
+        user=current_user["username"],
+        target_id=so.order_no,
+        details=f"Confirmed Sales Order {so.order_no} for {cust.name}. Reserved stock for {len(so.items)} lines. Total: Rs. {so.grand_total:,.2f}." + (f" Override: {so.override_reason}" if so.override_reason else "")
+    ))
+    db.commit()
+    db.refresh(so)
+    d = _sales_order_to_dict(so, is_privileged=True)
+    return {**d, "order": d}
+
+
+@app.post("/api/sales/orders/{order_id}/dispatch")
+async def dispatch_sales_order(
+    order_id: int,
+    req: SalesOrderDispatchRequest = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager", "storekeeper"]))
+):
+    """Dispatch goods from store (storekeeper/manager/admin). Creates OUT stock movement and updates reserved qty."""
+    so = db.query(SalesOrder).filter(SalesOrder.id == order_id).first()
+    if not so:
+        raise HTTPException(status_code=404, detail="Sales Order not found.")
+
+    if so.status not in ("CONFIRMED", "PARTIALLY_DISPATCHED"):
+        raise HTTPException(status_code=400, detail=f"Cannot dispatch order in '{so.status}' status. Must be CONFIRMED or PARTIALLY_DISPATCHED.")
+
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    now_full = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Map requested dispatch qtys
+    req_map = {}
+    if req and req.items:
+        for it in req.items:
+            req_map[it.get("item_id")] = it.get("dispatch_qty", 0)
+
+    total_dispatched_this_batch = 0
+
+    for line in so.items:
+        remaining = line.qty - (line.dispatched_qty or 0)
+        if remaining <= 0:
+            continue
+
+        disp_qty = req_map.get(line.item_id, remaining)
+        disp_qty = min(disp_qty, remaining)
+
+        if disp_qty > 0:
+            inv_item = line.item
+            if inv_item.quantity < disp_qty:
+                raise HTTPException(status_code=400, detail=f"Insufficient physical quantity for {inv_item.sku}. On hand: {inv_item.quantity}, dispatch requested: {disp_qty}.")
+
+            line.dispatched_qty = (line.dispatched_qty or 0) + disp_qty
+            inv_item.quantity = max(0, inv_item.quantity - disp_qty)
+            inv_item.reserved_qty = max(0, (inv_item.reserved_qty or 0) - disp_qty)
+            inv_item.last_updated = datetime.datetime.now().isoformat()
+
+            # Record official stock movement
+            mov = StockMovement(
+                item_id=inv_item.id,
+                type="OUT",
+                quantity=disp_qty,
+                reference=f"DISPATCH-{so.order_no}",
+                party=so.customer.name,
+                performed_by=current_user["username"],
+                timestamp=now_str,
+                balance_after=inv_item.quantity
+            )
+            db.add(mov)
+            total_dispatched_this_batch += disp_qty
+
+    if total_dispatched_this_batch == 0:
+        raise HTTPException(status_code=400, detail="No quantities were eligible for dispatch.")
+
+    # Check if fully dispatched
+    all_done = all(line.dispatched_qty >= line.qty for line in so.items)
+    so.status = "DISPATCHED" if all_done else "PARTIALLY_DISPATCHED"
+
+    db.add(AuditLog(
+        timestamp=now_full,
+        action="SO_DISPATCHED",
+        user=current_user["username"],
+        target_id=so.order_no,
+        details=f"Dispatched {total_dispatched_this_batch} units for {so.order_no} to {so.customer.name}. New status: {so.status}."
+    ))
+    db.commit()
+    db.refresh(so)
+    d = _sales_order_to_dict(so, is_privileged=True)
+    return {**d, "order": d}
+
+
+@app.post("/api/sales/orders/{order_id}/invoice")
+async def invoice_sales_order(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Generate GST Tax Invoice from Sales Order (admin/manager)."""
+    so = db.query(SalesOrder).filter(SalesOrder.id == order_id).first()
+    if not so:
+        raise HTTPException(status_code=404, detail="Sales Order not found.")
+
+    if so.status not in ("CONFIRMED", "PARTIALLY_DISPATCHED", "DISPATCHED"):
+        raise HTTPException(status_code=400, detail=f"Cannot invoice order in status '{so.status}'.")
+
+    # Check for existing invoice
+    existing_inv = db.query(Invoice).filter(Invoice.order_id == so.id, Invoice.status != "CANCELLED").first()
+    if existing_inv:
+        return {"status": "success", "invoice": _invoice_to_dict(existing_inv), "message": "Invoice already exists."}
+
+    company_state = os.getenv("COMPANY_STATE", "Haryana").strip().lower()
+    cust_state = (so.customer.state or "").strip().lower()
+    is_intra = (cust_state == company_state)
+
+    cgst_val = round(so.total_tax / 2.0, 2) if is_intra else 0.0
+    sgst_val = round(so.total_tax / 2.0, 2) if is_intra else 0.0
+    igst_val = round(so.total_tax, 2) if not is_intra else 0.0
+
+    inv_no = generate_next_invoice_no(db)
+    now_d = datetime.date.today().isoformat()
+    now_full = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    inv = Invoice(
+        invoice_no=inv_no,
+        order_id=so.id,
+        customer_id=so.customer_id,
+        date=now_d,
+        place_of_supply=so.customer.state,
+        taxable_value=so.total_taxable,
+        cgst=cgst_val,
+        sgst=sgst_val,
+        igst=igst_val,
+        total=so.grand_total,
+        status="UNPAID"
+    )
+    db.add(inv)
+
+    if so.status == "DISPATCHED":
+        so.status = "INVOICED"
+
+    db.add(AuditLog(
+        timestamp=now_full,
+        action="INVOICE_CREATED",
+        user=current_user["username"],
+        target_id=inv.invoice_no,
+        details=f"Generated Tax Invoice {inv.invoice_no} for order {so.order_no} ({so.customer.name}). Total: Rs. {inv.total:,.2f}."
+    ))
+    db.commit()
+    db.refresh(inv)
+    d = _invoice_to_dict(inv)
+    return {**d, "invoice": d}
+
+
+@app.post("/api/sales/orders/{order_id}/cancel")
+async def cancel_sales_order(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Cancel sales order and release any reserved stock (admin/manager)."""
+    so = db.query(SalesOrder).filter(SalesOrder.id == order_id).first()
+    if not so:
+        raise HTTPException(status_code=404, detail="Sales Order not found.")
+
+    if so.status in ("DISPATCHED", "INVOICED"):
+        raise HTTPException(status_code=400, detail="Cannot cancel an order that has already been dispatched or invoiced.")
+
+    # Release any reserved stock
+    if so.status in ("CONFIRMED", "PARTIALLY_DISPATCHED"):
+        for line in so.items:
+            unreleased = max(0, line.qty - (line.dispatched_qty or 0))
+            if unreleased > 0:
+                line.item.reserved_qty = max(0, (line.item.reserved_qty or 0) - unreleased)
+
+    so.status = "CANCELLED"
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    db.add(AuditLog(
+        timestamp=now_str,
+        action="SO_CANCELLED",
+        user=current_user["username"],
+        target_id=so.order_no,
+        details=f"Cancelled Sales Order {so.order_no} for {so.customer.name}. Released reserved inventory."
+    ))
+    db.commit()
+    db.refresh(so)
+    d = _sales_order_to_dict(so, is_privileged=True)
+    return {**d, "order": d}
+
+
+@app.get("/api/sales/orders/{order_id}/quote-pdf")
+async def download_quote_pdf(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Generate and stream formal quotation PDF."""
+    so = db.query(SalesOrder).filter(SalesOrder.id == order_id).first()
+    if not so:
+        raise HTTPException(status_code=404, detail="Sales Order not found.")
+
+    order_dict = _sales_order_to_dict(so, is_privileged=False)
+    order_dict["customer"] = {
+        "name": so.customer.name,
+        "gstin": so.customer.gstin,
+        "city": so.customer.city,
+        "state": so.customer.state,
+        "contact_person": so.customer.contact_person,
+        "phone": so.customer.phone
+    }
+    pdf_bytes = generate_quotation_pdf(order_dict)
+    filename = f"{so.order_no}_Quotation.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'}
+    )
+
+
+# ─── Invoices & Payments Endpoints ────────────────────────────────────
+
+@app.get("/api/invoices")
+async def get_invoices(
+    status: Optional[str] = None,
+    customer_id: Optional[int] = None,
+    search: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """List Tax Invoices with payment balance status."""
+    q = db.query(Invoice).order_by(Invoice.id.desc())
+    if status and status != "all":
+        q = q.filter(Invoice.status == status.upper())
+    if customer_id:
+        q = q.filter(Invoice.customer_id == customer_id)
+    if search:
+        s_fmt = f"%{search.lower()}%"
+        q = q.join(Customer).filter((func.lower(Invoice.invoice_no).like(s_fmt)) | (func.lower(Customer.name).like(s_fmt)))
+
+    invs = q.all()
+    return [_invoice_to_dict(inv) for inv in invs]
+
+
+@app.get("/api/invoices/{invoice_id}")
+async def get_single_invoice(
+    invoice_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Retrieve single invoice details and payment history."""
+    inv = db.query(Invoice).filter(Invoice.id == invoice_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found.")
+    return _invoice_to_dict(inv)
+
+
+@app.post("/api/invoices/{invoice_id}/payments")
+async def record_invoice_payment(
+    invoice_id: int,
+    req: PaymentCreateRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Record customer payment against Tax Invoice (admin/manager)."""
+    inv = db.query(Invoice).filter(Invoice.id == invoice_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found.")
+
+    if req.amount <= 0:
+        raise HTTPException(status_code=400, detail="Payment amount must be greater than zero.")
+
+    now_d = req.date or datetime.date.today().isoformat()
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    pmt = Payment(
+        invoice_id=inv.id,
+        amount=round(req.amount, 2),
+        mode=req.mode or "NEFT/RTGS",
+        reference=req.reference,
+        date=now_d,
+        recorded_by=current_user["username"]
+    )
+    db.add(pmt)
+    db.flush()
+
+    total_paid = sum(p.amount for p in inv.payments)
+    if total_paid >= inv.total:
+        inv.status = "PAID"
+    elif total_paid > 0:
+        inv.status = "PARTIALLY_PAID"
+
+    db.add(AuditLog(
+        timestamp=now_str,
+        action="PAYMENT_RECORDED",
+        user=current_user["username"],
+        target_id=inv.invoice_no,
+        details=f"Recorded Rs. {req.amount:,.2f} payment via {pmt.mode} for {inv.invoice_no} ({inv.customer.name}). Ref: {pmt.reference or 'N/A'}. New status: {inv.status}."
+    ))
+    db.commit()
+    db.refresh(inv)
+    return {"status": "success", "invoice": _invoice_to_dict(inv)}
+
+
+@app.get("/api/invoices/{invoice_id}/pdf")
+async def download_invoice_pdf(
+    invoice_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Generate and stream Indian GST Tax Invoice PDF with Anishka letterhead."""
+    inv = db.query(Invoice).filter(Invoice.id == invoice_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found.")
+
+    inv_dict = _invoice_to_dict(inv)
+    inv_dict["customer"] = {
+        "name": inv.customer.name,
+        "gstin": inv.customer.gstin,
+        "city": inv.customer.city,
+        "state": inv.customer.state,
+        "contact_person": inv.customer.contact_person,
+        "phone": inv.customer.phone
+    }
+    items_list = []
+    if inv.order and inv.order.items:
+        for it in inv.order.items:
+            item_obj = it.item
+            line_taxable = round(it.qty * it.unit_price * (1.0 - (it.discount_pct / 100.0)), 2)
+            gst_pct = getattr(item_obj, "gst_rate", 18.0) or 18.0
+            items_list.append({
+                "sku": item_obj.sku if item_obj else "",
+                "name": item_obj.name if item_obj else "Welding Spare",
+                "hsn_code": getattr(item_obj, "hsn_code", "8466"),
+                "qty": it.qty,
+                "unit": item_obj.unit if item_obj else "pcs",
+                "unit_price": it.unit_price,
+                "taxable": line_taxable,
+                "gst_rate": gst_pct,
+                "total": round(line_taxable * (1 + gst_pct / 100.0), 2)
+            })
+    inv_dict["items"] = items_list
+
+    pdf_bytes = generate_tax_invoice_pdf(inv_dict)
+    clean_no = inv.invoice_no.replace("/", "-")
+    filename = f"{clean_no}_Tax_Invoice.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'}
+    )
+
+
+# ─── SALES OPPORTUNITIES & WHATSAPP COMMUNICATIONS API ───────────────────────
+
+@app.get("/api/sales/opportunities")
+async def get_sales_opportunities(
+    window_days: Optional[int] = 14,
+    confidence: Optional[str] = None,
+    stock_status: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Computes and returns predictive re-order opportunities for industrial welding customers.
+    Filters by window_days (7, 14, 30, -1 for overdue, None for all), confidence level, or stock coverage.
+    """
+    return compute_sales_opportunities(
+        db=db,
+        window_days=window_days,
+        confidence_filter=confidence,
+        stock_status_filter=stock_status
+    )
+
+
+@app.post("/api/sales/opportunities/{opp_id}/quote")
+async def create_quote_from_opportunity(
+    opp_id: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """
+    Converts an identified predictive re-order opportunity into a formal sales quotation (status=QUOTE).
+    """
+    opp_data = compute_sales_opportunities(db=db, window_days=None)
+    target_opp = next((o for o in opp_data["opportunities"] if o["id"] == opp_id), None)
+    if not target_opp:
+        raise HTTPException(status_code=404, detail="Opportunity not found.")
+
+    count = db.query(SalesOrder).count() + 1
+    order_no = f"ANI-QT-{datetime.date.today().year}-{count:04d}"
+
+    so = SalesOrder(
+        order_no=order_no,
+        customer_id=target_opp["customer_id"],
+        status="QUOTE",
+        created_by=current_user.get("username", "manager"),
+        created_at=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        valid_until=(datetime.date.today() + datetime.timedelta(days=15)).isoformat(),
+        notes=f"Auto-generated quotation from predictive cadence opportunity {opp_id}. Cadence: {target_opp['cadence_days']}d.",
+        total_taxable=target_opp["taxable_value"],
+        total_tax=target_opp["gst_amount"],
+        grand_total=target_opp["expected_value"]
+    )
+    db.add(so)
+    db.flush()
+
+    soi = SalesOrderItem(
+        order_id=so.id,
+        item_id=target_opp["item_id"],
+        qty=target_opp["usual_qty"],
+        unit_price=target_opp["unit_price"],
+        discount_pct=0.0,
+        gst_rate=target_opp["gst_rate"]
+    )
+    db.add(soi)
+
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="SALES_QUOTE_CREATED_FROM_OPPORTUNITY",
+        user=current_user["username"],
+        target_id=order_no,
+        details=f"Created quotation {order_no} for customer '{target_opp['customer_name']}' from opportunity {opp_id} (value: Rs. {target_opp['expected_value']:,.2f})."
+    ))
+    db.commit()
+    db.refresh(so)
+    return _sales_order_to_dict(so, is_privileged=True)
+
+
+@app.get("/api/sales/funnel")
+async def get_sales_funnel_metrics(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Returns end-to-end sales opportunity funnel metrics:
+    Opportunities Identified -> Messages Sent -> Quotes Created -> Orders Won.
+    """
+    return compute_sales_funnel(db)
+
+
+@app.post("/api/communications/whatsapp/preview")
+async def preview_whatsapp_message(
+    req: WhatsAppPreviewRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Renders an editable WhatsApp message preview in English or Hindi,
+    returns recipient details, opt-out status, and wa.me deep-link.
+    """
+    context = {}
+    phone = ""
+    opted_out = False
+
+    if req.template_type == "opportunity":
+        opp_data = compute_sales_opportunities(db=db, window_days=None)
+        target = next((o for o in opp_data["opportunities"] if o["id"] == req.ref_id), None)
+        if target:
+            context = target
+            phone = target["customer_phone"]
+            opted_out = target.get("whatsapp_opt_out", False)
+        elif req.customer_id:
+            c = db.query(Customer).filter(Customer.id == req.customer_id).first()
+            if c:
+                context = {"customer_name": c.name, "contact_person": c.contact_person}
+                phone = c.phone or ""
+                opted_out = getattr(c, "whatsapp_opt_out", False)
+
+    elif req.template_type == "po":
+        po = db.query(Procurement).filter(
+            (Procurement.po_number == req.ref_id) | (Procurement.id == req.ref_id)
+        ).first()
+        if not po:
+            raise HTTPException(status_code=404, detail="Purchase order not found.")
+        sup = getattr(po, "supplier", None) or db.query(Vendor).filter(Vendor.id == po.supplier_id).first()
+        sup_name = sup.name if sup else (po.supplier_id or "Valued Supplier")
+        phone = sup.phone if sup else ""
+        item_count = len(po.items) if getattr(po, "items", None) else 1
+        grand_total = getattr(po, "total_value", 0.0) or 0.0
+        delivery_date = getattr(po, "expected_date", None) or (po.created_at[:10] if po.created_at else "3 Days")
+        context = {
+            "supplier_name": sup_name,
+            "po_no": po.po_number,
+            "item_count": item_count,
+            "grand_total": grand_total,
+            "delivery_date": delivery_date
+        }
+
+    clean_phone = clean_whatsapp_phone(phone)
+    msg_text = req.custom_text if req.custom_text else get_whatsapp_template(req.template_type, context, lang=req.lang or "en")
+    wa_link = build_whatsapp_link(clean_phone, msg_text) if clean_phone else ""
+
+    return {
+        "status": "success",
+        "template_type": req.template_type,
+        "ref_id": req.ref_id,
+        "lang": req.lang or "en",
+        "recipient_phone": clean_phone,
+        "opted_out": opted_out,
+        "message": msg_text,
+        "wa_link": wa_link
+    }
+
+
+@app.post("/api/communications/whatsapp/send")
+async def send_whatsapp_message_api(
+    req: WhatsAppSendRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager", "storekeeper"]))
+):
+    """
+    Sends or simulates dispatching a WhatsApp message (English/Hindi).
+    Enforces customer opt-out policy and logs transaction in Outbox with sender identity.
+    """
+    res = send_or_simulate_whatsapp_message(
+        db=db,
+        recipient_phone=req.phone,
+        message_text=req.message,
+        sender=current_user.get("username", "system"),
+        ref_type=req.template_type.upper(),
+        ref_id=req.ref_id,
+        customer_id=req.customer_id,
+        supplier_id=req.supplier_id,
+        lang=req.lang or "en"
+    )
+    if res.get("status") == "opted_out":
+        raise HTTPException(status_code=400, detail=res["message"])
+    if res.get("status") == "error":
+        raise HTTPException(status_code=400, detail=res["message"])
+    return res
+
+
+@app.put("/api/customers/{customer_id}/whatsapp-opt")
+async def update_customer_whatsapp_opt(
+    customer_id: int,
+    req: CustomerOptOutRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Update customer's WhatsApp messaging consent/opt-out status."""
+    cust = db.query(Customer).filter(Customer.id == customer_id).first()
+    if not cust:
+        raise HTTPException(status_code=404, detail="Customer not found.")
+    cust.whatsapp_opt_out = bool(req.opt_out)
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="CUSTOMER_WHATSAPP_OPT_CHANGED",
+        user=current_user["username"],
+        target_id=cust.name,
+        details=f"Customer '{cust.name}' WhatsApp opt_out set to {req.opt_out}."
+    ))
+    db.commit()
+    db.refresh(cust)
+    return {
+        "status": "success",
+        "customer_id": cust.id,
+        "customer_name": cust.name,
+        "whatsapp_opt_out": cust.whatsapp_opt_out,
+        "message": "Opt-out status updated successfully."
+    }
+
+
+# ===========================================================================
+# BUSINESS REPORTS (GST, TALLY VOUCHERS, OWNER SUMMARY)
+# ===========================================================================
+
+class TallySettingsUpdateRequest(BaseModel):
+    tally_company_name: Optional[str] = None
+    tally_sales_ledger: Optional[str] = None
+    tally_purchase_ledger: Optional[str] = None
+    tally_output_cgst_ledger: Optional[str] = None
+    tally_output_sgst_ledger: Optional[str] = None
+    tally_output_igst_ledger: Optional[str] = None
+    tally_input_cgst_ledger: Optional[str] = None
+    tally_input_sgst_ledger: Optional[str] = None
+    tally_input_igst_ledger: Optional[str] = None
+    tally_round_off_ledger: Optional[str] = None
+    tally_cash_ledger: Optional[str] = None
+    tally_bank_ledger: Optional[str] = None
+
+
+class OwnerSummaryDispatchRequest(BaseModel):
+    recipient_email: Optional[str] = None
+    from_date: Optional[str] = None
+    to_date: Optional[str] = None
+
+
+@app.get("/api/reports/gst/sales-register")
+async def get_gst_sales_register_api(
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    month: Optional[str] = None,
+    format: str = "json",
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """GST Sales Register listing all invoices, customer GSTIN, POS, and tax breakdown."""
+    if format.lower() == "csv":
+        csv_data = export_sales_register_csv(db=db, from_date=from_date, to_date=to_date, month=month)
+        fname = f"GST_Sales_Register_{month or (from_date + '_' + to_date if from_date and to_date else 'all')}.csv"
+        return Response(content=csv_data, media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+    return get_gst_sales_register(db=db, from_date=from_date, to_date=to_date, month=month)
+
+
+@app.get("/api/reports/gst/purchase-register")
+async def get_gst_purchase_register_api(
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    month: Optional[str] = None,
+    format: str = "json",
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """GST Purchase Register listing all supplier purchase orders and tax breakdown."""
+    if format.lower() == "csv":
+        csv_data = export_purchase_register_csv(db=db, from_date=from_date, to_date=to_date, month=month)
+        fname = f"GST_Purchase_Register_{month or (from_date + '_' + to_date if from_date and to_date else 'all')}.csv"
+        return Response(content=csv_data, media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+    return get_gst_purchase_register(db=db, from_date=from_date, to_date=to_date, month=month)
+
+
+@app.get("/api/reports/gst/gstr1")
+async def get_gstr1_summary_api(
+    month: Optional[str] = None,
+    format: str = "json",
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """GSTR-1 B2B and B2C summary for chosen month, exportable to official offline CSV format."""
+    chosen_month = month or datetime.date.today().strftime("%Y-%m")
+    if format.lower() == "b2b_csv":
+        csv_data = export_gstr1_b2b_csv(db=db, month=chosen_month)
+        return Response(content=csv_data, media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="GSTR1_B2B_{chosen_month}.csv"'})
+    elif format.lower() == "b2c_csv":
+        csv_data = export_gstr1_b2c_csv(db=db, month=chosen_month)
+        return Response(content=csv_data, media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="GSTR1_B2CS_{chosen_month}.csv"'})
+    return get_gstr1_summary(db=db, month=chosen_month)
+
+
+@app.get("/api/reports/gst/hsn-summary")
+async def get_hsn_summary_api(
+    month: Optional[str] = None,
+    format: str = "json",
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """HSN-wise sales summary for chosen month, exportable to CSV."""
+    chosen_month = month or datetime.date.today().strftime("%Y-%m")
+    if format.lower() == "csv":
+        csv_data = export_hsn_summary_csv(db=db, month=chosen_month)
+        return Response(content=csv_data, media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="GST_HSN_Summary_{chosen_month}.csv"'})
+    return get_hsn_summary(db=db, month=chosen_month)
+
+
+@app.get("/api/reports/tally/settings")
+async def get_tally_settings_api(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Retrieve Tally ledger mappings."""
+    return get_tally_ledger_settings(db)
+
+
+@app.post("/api/reports/tally/settings")
+async def update_tally_settings_api(
+    req: TallySettingsUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Update Tally ledger configurations."""
+    update_data = {k: v for k, v in req.model_dump().items() if v is not None}
+    updated = save_tally_ledger_settings(db=db, settings=update_data, username=current_user["username"])
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="TALLY_SETTINGS_UPDATED",
+        user=current_user["username"],
+        target_id="Tally",
+        details="Updated Tally ledger mappings in AppSettings."
+    ))
+    db.commit()
+    return updated
+
+
+@app.get("/api/reports/tally/vouchers")
+async def get_tally_vouchers_api(
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    type: str = "both",
+    format: str = "xml",
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Export Sales and Purchase vouchers in Tally XML or CSV format."""
+    v_type = type.lower() if type.lower() in ("sales", "purchase", "both") else "both"
+    period_tag = f"{from_date or 'start'}_to_{to_date or 'today'}"
+
+    if format.lower() == "csv":
+        csv_data = generate_tally_csv_vouchers(db=db, from_date=from_date, to_date=to_date, voucher_type=v_type)
+        return Response(
+            content=csv_data,
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="Tally_Vouchers_{v_type}_{period_tag}.csv"'}
+        )
+
+    xml_data = generate_tally_xml_vouchers(db=db, from_date=from_date, to_date=to_date, voucher_type=v_type)
+    return Response(
+        content=xml_data,
+        media_type="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="Tally_Vouchers_{v_type}_{period_tag}.xml"'}
+    )
+
+
+@app.get("/api/reports/owner-summary")
+async def get_owner_summary_api(
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """
+    Weekly business summary for business owner.
+    Computes all numbers in verified code; LLM synthesizes narrative only.
+    """
+    metrics = compute_owner_summary_metrics(db=db, from_date=from_date, to_date=to_date)
+    narrative = generate_owner_summary_narrative(metrics)
+    return {
+        "period": metrics["period"],
+        "metrics": metrics,
+        "narrative": narrative,
+        "disclaimer": STATUTORY_GST_NOTICE
+    }
+
+
+@app.get("/api/reports/owner-summary/pdf")
+async def get_owner_summary_pdf_api(
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Delivers executive business summary as a high-resolution PDF document."""
+    metrics = compute_owner_summary_metrics(db=db, from_date=from_date, to_date=to_date)
+    narrative = generate_owner_summary_narrative(metrics)
+    pdf_bytes = generate_owner_summary_pdf(metrics=metrics, narrative=narrative)
+    fname = f"Executive_Weekly_Summary_{datetime.date.today().strftime('%Y%m%d')}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'}
+    )
+
+
+@app.post("/api/reports/owner-summary/dispatch")
+async def dispatch_owner_summary_api(
+    req: OwnerSummaryDispatchRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin", "manager"]))
+):
+    """Dispatches executive owner summary to Outbox for delivery."""
+    metrics = compute_owner_summary_metrics(db=db, from_date=req.from_date, to_date=req.to_date)
+    narrative = generate_owner_summary_narrative(metrics)
+    res = dispatch_owner_summary_outbox(
+        db=db,
+        metrics=metrics,
+        narrative=narrative,
+        recipient_email=req.recipient_email,
+        sender=current_user["username"]
+    )
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="OWNER_SUMMARY_DISPATCHED",
+        user=current_user["username"],
+        target_id=res["recipient_email"],
+        details=f"Dispatched Weekly Executive Summary ({metrics['period']['from_date']} to {metrics['period']['to_date']}) to Outbox."
+    ))
+    db.commit()
+    return res
+
+
+# =============================================================================
+# PILOT READINESS MODULES: SECURITY, USER MANAGEMENT, IMPORT WIZARD, BACKUP
+# =============================================================================
+
+# --- Pydantic Models ---
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
+
+class CreateUserRequest(BaseModel):
+    username: str
+    role: str
+    full_name: Optional[str] = None
+    password: str
+    must_change_password: Optional[bool] = True
+
+class UpdateUserRequest(BaseModel):
+    role: Optional[str] = None
+    full_name: Optional[str] = None
+    is_active: Optional[bool] = None
+    new_password: Optional[str] = None
+    must_change_password: Optional[bool] = None
+
+class ImportCommitPayload(BaseModel):
+    import_type: str
+    filename: str
+    rows: list = []
+
+class BackupCreatePayload(BaseModel):
+    tag: Optional[str] = "manual"
+    retention_days: Optional[int] = 14
+
+class BackupRestorePayload(BaseModel):
+    filename: str
+    force: Optional[bool] = False
+
+
+# --- 1. Password Management & Security Endpoints ---
+
+@app.post("/api/auth/change-password")
+async def api_change_password(
+    req: ChangePasswordRequest,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Change password for the currently logged-in user with complexity validation."""
+    username = current_user["username"]
+    user = db.query(UserRole).filter(UserRole.username == username).first()
+
+    # If user record doesn't exist yet (e.g. legacy seed account), create it now
+    if not user:
+        valid_defaults = {"admin": "admin@2026", "manager": "manager@2026", "storekeeper": "storekeeper@2026"}
+        if username in valid_defaults and req.old_password == valid_defaults[username]:
+            user = UserRole(
+                username=username,
+                password=hash_password(valid_defaults[username]),
+                role=current_user.get("role", username),
+                full_name=current_user.get("full_name", username),
+                created_at=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+        else:
+            raise HTTPException(status_code=400, detail="Invalid current password.")
+
+    if not verify_password(req.old_password, user.password):
+        raise HTTPException(status_code=400, detail="Current password does not match.")
+
+    # Validate complexity
+    is_valid, msg = validate_password_complexity(req.new_password)
+    if not is_valid:
+        raise HTTPException(status_code=422, detail=msg)
+
+    # Hash new password with Argon2/bcrypt
+    user.password = hash_password(req.new_password)
+    user.must_change_password = False
+    
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="PASSWORD_CHANGED",
+        user=username,
+        target_id=username,
+        details="User successfully changed password."
+    ))
+    db.commit()
+
+    return {"status": "success", "message": "Password updated successfully."}
+
+
+# --- 2. User Management Endpoints (Admin Only) ---
+
+@app.get("/api/users", dependencies=[Depends(require_roles(["admin"]))])
+async def api_list_users(db: Session = Depends(get_db)):
+    """List all registered users (passwords omitted)."""
+    users = db.query(UserRole).order_by(UserRole.id.asc()).all()
+    res = []
+    for u in users:
+        res.append({
+            "id": u.id,
+            "username": u.username,
+            "role": u.role,
+            "full_name": u.full_name or u.username,
+            "is_active": getattr(u, "is_active", True),
+            "must_change_password": getattr(u, "must_change_password", False),
+            "created_at": u.created_at,
+            "last_login": getattr(u, "last_login", None)
+        })
+    return res
+
+
+@app.post("/api/users", dependencies=[Depends(require_roles(["admin"]))])
+async def api_create_user(
+    req: CreateUserRequest,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new user with role and Argon2/bcrypt password hashing."""
+    if req.role not in ("admin", "manager", "storekeeper"):
+        raise HTTPException(status_code=400, detail="Invalid role. Must be 'admin', 'manager', or 'storekeeper'.")
+
+    clean_uname = req.username.strip().lower()
+    existing = db.query(UserRole).filter(UserRole.username == clean_uname).first()
+    if existing:
+        raise HTTPException(status_code=400, detail=f"Username '{clean_uname}' already exists.")
+
+    new_user = UserRole(
+        username=clean_uname,
+        password=hash_password(req.password),
+        role=req.role,
+        full_name=req.full_name or clean_uname.title(),
+        created_at=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        must_change_password=bool(req.must_change_password),
+        is_active=True
+    )
+    db.add(new_user)
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="USER_CREATED",
+        user=current_user["username"],
+        target_id=clean_uname,
+        details=f"Created user {clean_uname} with role {req.role}."
+    ))
+    db.commit()
+    db.refresh(new_user)
+
+    return {
+        "status": "success",
+        "id": new_user.id,
+        "username": new_user.username,
+        "role": new_user.role,
+        "full_name": new_user.full_name,
+        "must_change_password": new_user.must_change_password
+    }
+
+
+@app.put("/api/users/{user_id}", dependencies=[Depends(require_roles(["admin"]))])
+async def api_update_user(
+    user_id: int,
+    req: UpdateUserRequest,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update user role, full name, active status, or reset password."""
+    user = db.query(UserRole).filter(UserRole.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    if req.role:
+        if req.role not in ("admin", "manager", "storekeeper"):
+            raise HTTPException(status_code=400, detail="Invalid role.")
+        user.role = req.role
+
+    if req.full_name is not None:
+        user.full_name = req.full_name
+
+    if req.is_active is not None:
+        # Prevent self-deactivation
+        if user.username == current_user["username"] and not req.is_active:
+            raise HTTPException(status_code=400, detail="You cannot deactivate your own account.")
+        user.is_active = req.is_active
+
+    if req.new_password:
+        user.password = hash_password(req.new_password)
+        user.must_change_password = True
+
+    if req.must_change_password is not None:
+        user.must_change_password = req.must_change_password
+
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="USER_UPDATED",
+        user=current_user["username"],
+        target_id=user.username,
+        details=f"Updated settings for user {user.username}."
+    ))
+    db.commit()
+
+    return {
+        "status": "success",
+        "id": user.id,
+        "username": user.username,
+        "role": user.role,
+        "full_name": user.full_name,
+        "is_active": user.is_active,
+        "must_change_password": user.must_change_password
+    }
+
+
+@app.delete("/api/users/{user_id}", dependencies=[Depends(require_roles(["admin"]))])
+async def api_delete_user(
+    user_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Deactivate user account (soft delete for audit integrity)."""
+    user = db.query(UserRole).filter(UserRole.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    if user.username == current_user["username"]:
+        raise HTTPException(status_code=400, detail="You cannot delete your own account.")
+
+    user.is_active = False
+    db.add(AuditLog(
+        timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        action="USER_DEACTIVATED",
+        user=current_user["username"],
+        target_id=user.username,
+        details=f"Deactivated account {user.username}."
+    ))
+    db.commit()
+
+    return {"status": "success", "message": f"User {user.username} deactivated."}
+
+
+# --- 3. Data Import Wizard Endpoints (Admin & Manager) ---
+
+@app.get("/api/import/template")
+async def api_download_import_template(
+    type: str = "items",
+    format: str = "csv"
+):
+    """Download pre-populated sample templates for Items, Suppliers, or Opening Stock."""
+    if type not in ("items", "suppliers", "opening_stock"):
+        raise HTTPException(status_code=400, detail="Invalid import type. Allowed: items, suppliers, opening_stock.")
+
+    content, filename, media_type = generate_template(type, format)
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
+@app.post("/api/import/preview", dependencies=[Depends(require_roles(["admin", "manager"]))])
+async def api_import_preview(
+    file: UploadFile = File(...),
+    import_type: str = Form("items"),
+    column_mapping: Optional[str] = Form(None),
+    db: Session = Depends(get_db)
+):
+    """Upload and validate dataset row-by-row before committing."""
+    if import_type not in ("items", "suppliers", "opening_stock"):
+        raise HTTPException(status_code=400, detail="Invalid import type.")
+
+    file_bytes = await file.read()
+    if len(file_bytes) == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    try:
+        df = parse_file_to_dataframe(file_bytes, file.filename)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to read file: {e}")
+
+    parsed_mapping = None
+    if column_mapping:
+        try:
+            parsed_mapping = json.loads(column_mapping)
+        except Exception:
+            pass
+
+    validation = validate_import_data(df, import_type, parsed_mapping, db)
+    validation["filename"] = file.filename
+    return validation
+
+
+@app.post("/api/import/commit", dependencies=[Depends(require_roles(["admin", "manager"]))])
+async def api_import_commit(
+    payload: ImportCommitPayload,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Commit validated import rows with an undo-able batch ID."""
+    if payload.import_type not in ("items", "suppliers", "opening_stock"):
+        raise HTTPException(status_code=400, detail="Invalid import type.")
+
+    if not payload.rows:
+        raise HTTPException(status_code=400, detail="No rows provided for commit.")
+
+    try:
+        result = commit_import_batch(
+            validated_rows=payload.rows,
+            import_type=payload.import_type,
+            filename=payload.filename,
+            username=current_user["username"],
+            db=db
+        )
+        return result
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Import failed during commit: {e}")
+
+
+@app.post("/api/import/rollback/{batch_id}", dependencies=[Depends(require_roles(["admin"]))])
+async def api_import_rollback(
+    batch_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Roll back a committed import batch and restore previous inventory levels."""
+    try:
+        res = rollback_import_batch(batch_id, current_user["username"], db)
+        return res
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Rollback failed: {e}")
+
+
+@app.get("/api/import/batches", dependencies=[Depends(require_roles(["admin", "manager"]))])
+async def api_list_import_batches(db: Session = Depends(get_db)):
+    """List historical import batches for management."""
+    return list_import_batches(db)
+
+
+# --- 4. Backup & Disaster Recovery Endpoints (Admin Only) ---
+
+@app.get("/api/backup/list", dependencies=[Depends(require_roles(["admin"]))])
+async def api_list_backups():
+    """List all available database backup archives."""
+    return list_backups()
+
+
+@app.post("/api/backup/create", dependencies=[Depends(require_roles(["admin"]))])
+async def api_create_backup(
+    payload: BackupCreatePayload = BackupCreatePayload(),
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Trigger an immediate database backup archive."""
+    try:
+        res = create_backup(tag=payload.tag or "manual", retention_days=payload.retention_days or 14)
+        db.add(AuditLog(
+            timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            action="BACKUP_CREATED",
+            user=current_user["username"],
+            target_id=res["filename"],
+            details=f"Created {res['db_type']} backup {res['filename']} ({res['size_kb']} KB)."
+        ))
+        db.commit()
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Backup generation failed: {e}")
+
+
+@app.get("/api/backup/download/{filename}", dependencies=[Depends(require_roles(["admin"]))])
+async def api_download_backup(filename: str):
+    """Download a specific backup file."""
+    safe_name = os.path.basename(filename)
+    path = os.path.join(BACKUP_DIR, safe_name)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Backup file not found.")
+
+    media_type = "application/x-sqlite3" if safe_name.endswith(".db") else "text/plain"
+    return FileResponse(path, filename=safe_name, media_type=media_type)
+
+
+@app.post("/api/backup/restore", dependencies=[Depends(require_roles(["admin"]))])
+async def api_restore_backup(
+    payload: BackupRestorePayload,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Restore database from a specified backup file (admin only)."""
+    safe_name = os.path.basename(payload.filename)
+    path = os.path.join(BACKUP_DIR, safe_name)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail=f"Backup file '{safe_name}' not found.")
+
+    try:
+        res = restore_backup(path, force=payload.force or False)
+        db.add(AuditLog(
+            timestamp=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            action="DATABASE_RESTORED",
+            user=current_user["username"],
+            target_id=safe_name,
+            details=f"Restored database from {safe_name}. Pre-restore snapshot: {res.get('safety_snapshot')}."
+        ))
+        db.commit()
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Restore operation failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# BUSINESS IMPACT & ROI / PILOT KPI TRACKER / PRICING API
+# ---------------------------------------------------------------------------
+
+from business_impact import (
+    get_pilot_kpis, create_pilot_kpi, update_pilot_kpi, delete_pilot_kpi,
+    calculate_roi, calculate_unit_economics,
+    DEFAULT_SUBSCRIPTION_PLANS, DEFAULT_ROI_BENCHMARKS, DEFAULT_UNIT_ECONOMICS
+)
+
+class PilotKPICreate(BaseModel):
+    kpi_name: str
+    category: Optional[str] = "Operations"
+    unit: Optional[str] = ""
+    higher_is_better: Optional[bool] = False
+    baseline_value: float
+    baseline_date: Optional[str] = None
+    measured_value: Optional[float] = None
+    measured_date: Optional[str] = None
+    target_value: Optional[float] = None
+    notes: Optional[str] = None
+
+class PilotKPIUpdate(BaseModel):
+    kpi_name: Optional[str] = None
+    category: Optional[str] = None
+    unit: Optional[str] = None
+    higher_is_better: Optional[bool] = None
+    baseline_value: Optional[float] = None
+    baseline_date: Optional[str] = None
+    measured_value: Optional[float] = None
+    measured_date: Optional[str] = None
+    target_value: Optional[float] = None
+    notes: Optional[str] = None
+
+@app.get("/api/business-impact/pilot-kpis", dependencies=[Depends(require_roles(["admin", "manager"]))])
+async def api_get_pilot_kpis(db: Session = Depends(get_db)):
+    """Retrieve all pilot KPIs with before/after comparisons and improvement status."""
+    return get_pilot_kpis(db)
+
+@app.post("/api/business-impact/pilot-kpis", dependencies=[Depends(require_roles(["admin", "manager"]))])
+async def api_create_pilot_kpi(req: PilotKPICreate, current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Add a new KPI reading to track for the pilot."""
+    return create_pilot_kpi(db, req.model_dump(), current_user["username"])
+
+@app.put("/api/business-impact/pilot-kpis/{kpi_id}", dependencies=[Depends(require_roles(["admin", "manager"]))])
+async def api_update_pilot_kpi(kpi_id: int, req: PilotKPIUpdate, current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Update baseline, measured value, or notes for a pilot KPI."""
+    try:
+        return update_pilot_kpi(db, kpi_id, req.model_dump(exclude_unset=True), current_user["username"])
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.delete("/api/business-impact/pilot-kpis/{kpi_id}", dependencies=[Depends(require_roles(["admin"]))])
+async def api_delete_pilot_kpi(kpi_id: int, db: Session = Depends(get_db)):
+    """Delete a pilot KPI reading (admin only)."""
+    deleted = delete_pilot_kpi(db, kpi_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Pilot KPI {kpi_id} not found.")
+    return {"status": "success", "message": f"Pilot KPI {kpi_id} deleted."}
+
+@app.post("/api/business-impact/roi-calculator", dependencies=[Depends(require_roles(["admin", "manager"]))])
+async def api_roi_calculator(payload: dict):
+    """
+    Compute operational and financial ROI with transparent formulas.
+    Inputs are provided by user (no prefilled invented numbers).
+    """
+    inputs = payload.get("inputs", {})
+    formulas = payload.get("formula_parameters", {})
+    return calculate_roi(inputs, formulas)
+
+@app.get("/api/business-impact/roi-benchmarks", dependencies=[Depends(require_roles(["admin", "manager"]))])
+async def api_get_roi_benchmarks():
+    """Return default benchmark formula multipliers and labels for the ROI calculator."""
+    return {
+        "benchmarks": DEFAULT_ROI_BENCHMARKS,
+        "descriptions": {
+            "time_reduction_pct": "Expected % reduction in stock counting and manual PO creation time",
+            "stockout_reduction_pct": "Expected % reduction in stockouts through automated ROP alerts",
+            "order_loss_per_stockout": "% of stockout incidents resulting in lost orders vs delayed supply",
+            "gross_margin_rate": "Typical gross margin % on industrial welding spares",
+            "inventory_holding_rate": "Annual cost % of capital, warehouse space, and obsolescence",
+            "dead_stock_reduction_pct": "% of dead/slow inventory converted back to working capital",
+            "annual_software_cost": "Reference annual ERP software subscription investment (₹)"
+        }
+    }
+
+@app.get("/api/business-impact/pricing-plans", dependencies=[Depends(require_roles(["admin", "manager"]))])
+async def api_pricing_plans():
+    """Return configurable SaaS subscription tiers and features."""
+    return {"plans": DEFAULT_SUBSCRIPTION_PLANS}
+
+@app.post("/api/business-impact/unit-economics", dependencies=[Depends(require_roles(["admin", "manager"]))])
+async def api_unit_economics(payload: dict):
+    """Calculate unit economics, contribution margins, and break-even customer count."""
+    return calculate_unit_economics(payload)

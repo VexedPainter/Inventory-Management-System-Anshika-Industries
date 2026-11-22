@@ -1,612 +1,395 @@
-<div align="center">
+# Anishka Inventory
 
-<!-- Animated Header Banner -->
-<img src="https://capsule-render.vercel.app/api?type=waving&color=0:0d1117,50:161b22,100:1f6feb&height=220&section=header&text=ShadowSync&fontSize=72&fontColor=58a6ff&fontAlignY=35&desc=AI-Powered%20Shadow%20Procurement%20Detection&descSize=18&descAlignY=55&animation=fadeIn" width="100%"/>
+**Enterprise Inventory Management System**  
+**Anishka Industries, Milestone Khandsa Road, Sector-10, Gurugram**
 
-<!-- Dynamic Badges -->
-<p>
-  <img src="https://img.shields.io/badge/Python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white" />
-  <img src="https://img.shields.io/badge/FastAPI-0.115-009688?style=for-the-badge&logo=fastapi&logoColor=white" />
-  <img src="https://img.shields.io/badge/Groq-LLaMA_3.3_70B-F55036?style=for-the-badge&logo=meta&logoColor=white" />
-  <img src="https://img.shields.io/badge/Cohere-Command_A-3A76F0?style=for-the-badge" />
-  <img src="https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white" />
-</p>
-<p>
-  <img src="https://img.shields.io/badge/SQLite-Database-003B57?style=for-the-badge&logo=sqlite&logoColor=white" />
-  <img src="https://img.shields.io/badge/PostgreSQL-Production-4169E1?style=for-the-badge&logo=postgresql&logoColor=white" />
-  <img src="https://img.shields.io/badge/Scikit--Learn-ML_Engine-F7931E?style=for-the-badge&logo=scikitlearn&logoColor=white" />
-  <img src="https://img.shields.io/badge/SAP-Connector-0FAAFF?style=for-the-badge&logo=sap&logoColor=white" />
-  <img src="https://img.shields.io/badge/CI%2FCD-GitHub_Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white" />
-</p>
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-2.0+-D71F00?style=for-the-badge&logo=sqlalchemy&logoColor=white)](https://www.sqlalchemy.org/)
+[![Groq](https://img.shields.io/badge/Groq-Qwen_3.8_27B-F55036?style=for-the-badge&logo=meta&logoColor=white)](https://groq.com)
+[![Python](https://img.shields.io/badge/Python-3.11_--_3.14-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![SQLite](https://img.shields.io/badge/SQLite-Database-003B57?style=for-the-badge&logo=sqlite&logoColor=white)](https://sqlite.org/)
 
-<p>
-  <a href="#-quick-start"><img src="https://img.shields.io/badge/🚀_Quick_Start-blue?style=for-the-badge" /></a>
-  <a href="#-key-features"><img src="https://img.shields.io/badge/✨_Features-purple?style=for-the-badge" /></a>
-  <a href="#-ai-copilot"><img src="https://img.shields.io/badge/🤖_AI_Copilot-green?style=for-the-badge" /></a>
-  <a href="#-api-reference"><img src="https://img.shields.io/badge/📡_API_Docs-orange?style=for-the-badge" /></a>
-  <a href="SECURITY.md"><img src="https://img.shields.io/badge/🔐_Security-red?style=for-the-badge" /></a>
-</p>
-
-<br/>
-
-> **Enterprise-grade real-time platform that detects shadow purchases — unauthorized, untracked procurement spending — using Machine Learning anomaly detection and a dual-LLM AI Copilot (Groq + Cohere).**
-
-</div>
+📖 **[5-Minute Demo Guide →](DEMO.md)**
 
 ---
 
-## 🎯 The Problem We Solve
+## 🎯 About Anishka Industries
 
-In large organizations, **shadow procurement** (maverick spending) accounts for **30–40% of total procurement spend** bypassing official PO systems — that's **$2.8M leakage per $100M budget** *(Gartner)*.
+Located at **Milestone Khandsa Road, Sector-10, Gurugram, Haryana**, **Anishka Industries** is a specialized manufacturer, stockist, and distributor of industrial welding spares and robotic welding automation hardware across the Delhi NCR manufacturing corridor.
 
-<table>
-<tr>
-<td width="50%">
-
-### ❌ Without ShadowSync
-- Untracked corporate card purchases
-- Unapproved vendor expense claims
-- After-hours emergency buys with no PO
-- **87 days** average manual detection time *(KPMG)*
-- Zero visibility into procurement compliance
-
-</td>
-<td width="50%">
-
-### ✅ With ShadowSync
-- **< 1 second** AI-powered detection
-- Dual-LLM copilot for instant risk analysis
-- Vendor collusion ring detection
-- Preventive auto-PO drafting
-- Real-time WebSocket dashboard with alerts
-
-</td>
-</tr>
-</table>
+### Product Lines Managed:
+1. **MIG Welding Spares:**
+   - Contact Tips (CuCrZr and E-Cu, M6 and M8 threads, 0.8mm, 1.0mm, 1.2mm, 1.6mm)
+   - Gas Nozzles (Conical, Cylindrical, Tapered, and Spot Nozzles for MB 15AK, MB 24KD, MB 36KD, MB 501D)
+   - Gas Diffusers (High-dielectric Ceramic and Heavy-duty Brass)
+   - Torch Liners (Steel wire liners for solid wire, Teflon liners for soft Aluminum wire)
+   - MIG Torches (Air-cooled MB 24KD / 36KD and Water-cooled MB 501D)
+2. **TIG Welding Spares:**
+   - Tungsten Electrodes (2% Thoriated Red, 2% Ceriated Grey, 1.5% Lanthanated Gold, Pure Green)
+   - Ceramic Alumina Gas Cups (#4, #5, #6, #7, #8, #10)
+   - Collets and Gas Lens Collet Bodies (1.6mm, 2.4mm, 3.2mm)
+   - TIG Torches (WP-17, WP-26 Flexible Neck, WP-18 Water-Cooled)
+   - Back Caps (Long, Medium, Short)
+3. **Robotics Welding Spares:**
+   - Robotic Torch Necks & Swan Necks (22° and 45° bends for ABB, Fanuc, Yaskawa, KUKA, Panasonic robots)
+   - Heavy-Duty Silver-Plated Robotic Contact Tips
+   - Automated Torch Cleaner Station Reamer Cutter Blades (12mm – 16mm)
+   - Pneumatic Anti-Spatter Injectors and Clamping Blocks
+   - Corrugated Robotic Cable Conduits and Cable Assemblies
+4. **Welding Wire & Consumables:**
+   - ER70S-6 Mild Steel MIG Wire Spools (0.8mm / 1.2mm 15kg spools)
+   - Stainless Steel ER308L / ER316L MIG Wire & TIG Filler Rods
+   - Aluminum ER4043 Wire Spools
+   - Anti-Spatter Chemical Liquids (5L) and Aerosol Sprays (500ml)
 
 ---
 
 ## ⚡ Quick Start
 
-<table>
-<tr><td>
-
-### 🐳 Docker (Recommended)
+### 1. Install Dependencies
 ```bash
-git clone https://github.com/VexedPainter/Shadow-Supply-Chain.git
-cd Shadow-Supply-Chain
-
-# Set your API keys
-cp .env.example .env
-# Edit .env with your GROQ_API_KEY and COHERE_API_KEY
-
-docker-compose up --build
-# → Dashboard: http://localhost:8000
-```
-
-</td><td>
-
-### 🐍 Manual Setup
-```bash
-git clone https://github.com/VexedPainter/Shadow-Supply-Chain.git
-cd Shadow-Supply-Chain
-
 pip install -r requirements.txt
-python generate_data.py
-
-python -m uvicorn app:app --host 0.0.0.0 --port 8000 --reload
-# → Dashboard: http://localhost:8000
 ```
 
-</td></tr>
-</table>
-
-> **Default Login:** Username from `ADMIN_USERNAME` env var (default: `admin`), Password from `ADMIN_PASSWORD` env var.
-> ⚠️ Always set `ADMIN_PASSWORD` via environment variable before deploying. See [Security Guide](SECURITY.md).
-
----
-
-## ✨ Key Features
-
-<table>
-<tr>
-<td align="center" width="33%">
-<h3>🔍 ML Detection Engine</h3>
-<p>Isolation Forest anomaly detection (v3) with 10 engineered features. See <a href="MODEL_CARD.md">MODEL_CARD.md</a>. Auto-retrains securely without score drift. 85%+ baseline accuracy — zero labeled data needed.</p>
-</td>
-<td align="center" width="33%">
-<h3>🤖 Dual-LLM AI Copilot</h3>
-<p>Groq (LLaMA 3.3 70B) at ~200ms for chat & deep analysis. Cohere (Command A) for executive summaries & vendor insights. Conversational natural language interface.</p>
-</td>
-<td align="center" width="33%">
-<h3>📊 Real-Time Dashboard</h3>
-<p>WebSocket-powered live feed. 4 interactive Chart.js visualizations. AI-ranked Priority Queue. Glassmorphic "Kinetic Ledger" design system.</p>
-</td>
-</tr>
-<tr>
-<td align="center" width="33%">
-<h3>🕸️ Vendor Collusion Detection</h3>
-<p>Graph analysis detects split-PO fraud rings — multiple shell vendors, same employee, amounts under approval thresholds. Strict thresholds prevent false positives. Automatic escalation.</p>
-</td>
-<td align="center" width="33%">
-<h3>🛡️ Preventive Intelligence</h3>
-<p>Auto-PO drafting when inventory hits reorder points. Predictive department risk scoring. Stops shadow purchases before they happen.</p>
-</td>
-<td align="center" width="33%">
-<h3>🔗 SAP BAPI Connector</h3>
-<p>Live RFC connection to SAP ERP (EKKO/EKPO/RBKP fields). Graceful simulation fallback with authentic field schemas. Works with any ERP via CSV/Excel import.</p>
-</td>
-</tr>
-<tr>
-<td align="center" width="33%">
-<h3>📱 Multi-Channel Alerts</h3>
-<p>Email (SMTP), Slack webhooks, and Firebase Cloud Messaging push notifications. Critical shadow alerts reach managers instantly on any device.</p>
-</td>
-<td align="center" width="33%">
-<h3>📄 Export & Reporting</h3>
-<p>Executive PDF reports with styled tables. CSV & Excel bulk exports. Auto-generated recommendations with severity scoring.</p>
-</td>
-<td align="center" width="33%">
-<h3>🔐 Enterprise Security</h3>
-<p>JWT session auth with RBAC (admin/analyst/auditor). Fernet field-level encryption. Complete audit trail. SOC 2 readiness checklist included.</p>
-</td>
-</tr>
-<tr>
-<td align="center" width="33%">
-<h3>🌙 OLED Dark Mode</h3>
-<p>A true pitch-black OLED dark mode with fluid CSS transitions, glowing animated toggles, and memory persistence. Perfect for late-night threat hunting.</p>
-</td>
-<td align="center" width="33%">
-<h3>⚙️ System Settings</h3>
-<p>Quick-access settings modal for instant UI customization, data density shifts, and hard-refresh data syncing.</p>
-</td>
-<td align="center" width="33%">
-</td>
-</tr>
-</table>
-
----
-
-## 🏗️ System Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         DATA INGESTION LAYER                            │
-│                                                                         │
-│   SAP BAPI (Live/Sim) ──┐                                              │
-│   CSV/Excel Import ─────┼──► Unified Transaction Pipeline               │
-│   ERP Batch Export ─────┘                                               │
-│                                                                         │
-│   Purchase Orders ────► Cross-Reference Engine                          │
-│   Vendor Registry ────► Trust Score Database                            │
-└─────────────────────────────┬───────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                      DETECTION ENGINE (AI/ML)                           │
-│                                                                         │
-│   PO Matching ─────► Shadow Flagging ─────► Isolation Forest Scoring    │
-│   (vendor+amount       (unmatched =          (10 features → risk        │
-│    ±5%, date ±7d)       shadow candidate)      score 0.0–1.0)           │
-│                                                                         │
-│   NLP Category ────► Vendor Trust ────► Collusion Graph ────► Alerts    │
-│   Classification      Score Update      Ring Detection        (Email/   │
-│                                                                Slack/   │
-│                                                                Push)    │
-└─────────────────────────────┬───────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    INTELLIGENCE & RESPONSE LAYER                        │
-│                                                                         │
-│   📊 Dashboard ───── Stats, Charts, Live Feed, Urgent Actions           │
-│   🤖 AI Copilot ──── Groq Chat + Cohere Summaries (dual-LLM)           │
-│   📋 Priority Queue ─ AI-ranked by severity with XAI breakdown          │
-│   🛡️ Prevention ──── Auto-PO Drafts, Dept Risk Predictions             │
-│   📄 Exports ──────── PDF Reports, CSV, Excel                           │
-│   🔍 Audit Trail ──── Full compliance logging                           │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 🧠 AI & ML Pipeline
-
-### Feature Engineering (10+ Features)
-
-```python
-Features = {
-    "amount":           float,    # Transaction dollar value
-    "hour_of_day":      int,      # After-hours = higher risk
-    "day_of_week":      int,      # Weekend purchases = higher risk
-    "amount_deviation": float,    # Deviation from vendor's average
-    "vendor_risk":      float,    # Vendor risk level (0–1)
-    "vendor_approved":  int,      # 1 = approved, 0 = unapproved
-    "payment_type":     int,      # Invoice=0, Card=1, Expense=2
-    "is_recurring":     int,      # Recurring pattern flag
-    "dept_risk":        float,    # Department's historical shadow rate
-    "amount_category":  int,      # Binned amount range
-}
-```
-
-### Detection Pipeline
-
-```
-Raw Transaction → Feature Extraction → PO Matching → If Unmatched:
-  → Isolation Forest Scoring → Category Classification
-  → Vendor Trust Update → Collusion Graph Check
-  → Priority Queue Ranking → Alert Dispatch (Email/Slack/Push)
-  → Store as ShadowPurchase → WebSocket Alert to Dashboard
-```
-
-| Parameter | Value |
-|-----------|-------|
-| **Algorithm** | Isolation Forest v3 (Unsupervised) |
-| **Training Data Required** | Zero — learns normal patterns automatically |
-| **Risk Thresholds** | > 0.6 High · 0.35–0.6 Medium · < 0.35 Low |
-| **Recalibration Guard** | Idempotent feedback loop prevents unbounded score drift |
-| **Baseline Accuracy** | 85%+ (improves with feedback loop) |
-
----
-
-## 🤖 AI Copilot
-
-The dual-LLM AI Copilot provides a conversational interface to your supply chain data.
-
-| Capability | Provider | Speed | Use Case |
-|------------|----------|-------|----------|
-| **Chat & Analysis** | Groq (LLaMA 3.3 70B) | ~200ms | *"What are the top risks right now?"* |
-| **Deep Shadow Analysis** | Groq (LLaMA 3.3 70B) | ~200ms | Root cause analysis of individual shadows |
-| **Executive Summaries** | Cohere (Command A) | ~1s | C-suite risk landscape overview |
-| **Vendor Insights** | Cohere (Command A) | ~1s | AI-generated vendor risk profiles |
-
-**Context Injection:** The AI automatically receives live system context (transaction counts, exposure, high-risk vendors) before every response — ensuring answers are always data-driven.
-
-### How to Use
-1. Click the floating **🤖 AI button** (bottom-right corner)
-2. Type your question in natural language
-3. Use ⚡ for health check or 📊 for executive summary
-
----
-
-## 🗄️ Database Schema
-
-**11 interconnected tables** — SQLite for dev, PostgreSQL for production (auto-detected via `DATABASE_URL`).
-
-```
-┌─────────────────┐     ┌──────────────────┐     ┌──────────────────┐
-│   transactions  │────►│ shadow_purchases │────►│ recommendations  │
-│  id, date,      │     │  risk_score,     │     │  action_taken,   │
-│  vendor, amount │     │  confidence,     │     │  priority        │
-│  payment_type   │     │  status,         │     └──────────────────┘
-│  department     │     │  priority_score  │
-│  is_shadow      │     │  estimated_loss  │     ┌──────────────────┐
-│  ai_risk_score  │     │  item_category   │────►│ behavior_metrics │
-└─────────────────┘     └──────────────────┘     └──────────────────┘
-
-┌─────────────────┐     ┌──────────────────┐     ┌──────────────────┐
-│    vendors      │     │   procurement    │     │  risk_snapshots  │
-│  trust_score    │     │   (PO records)   │     │  total_exposure  │
-│  risk_level     │     │                  │     │  shadow_rate     │
-│  approved       │     │                  │     │  risk_level      │
-└─────────────────┘     └──────────────────┘     └──────────────────┘
-
-┌─────────────────┐     ┌──────────────────┐     ┌──────────────────┐
-│   inventory     │     │  user_feedback   │     │   audit_log      │
-│  quantity, sku  │     │  correct_label   │     │  action_type     │
-│  reorder_level  │     │  feedback_text   │     │  performed_by    │
-└─────────────────┘     └──────────────────┘     └──────────────────┘
-```
-
----
-
-## 📡 API Reference
-
-<details>
-<summary><b>📊 Core Data APIs</b></summary>
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/stats` | Dashboard statistics (exposure, shadow rate, quality) |
-| `GET` | `/api/transactions` | All financial transactions with shadow flags |
-| `GET` | `/api/shadows` | Detected shadow purchases with risk scores |
-| `GET` | `/api/procurement` | Approved purchase orders |
-| `GET` | `/api/vendors` | Vendor registry with trust scores |
-| `GET` | `/api/inventory` | Current inventory levels |
-| `GET` | `/api/audit` | Complete audit trail |
-| `GET` | `/api/health` | System health check |
-
-</details>
-
-<details>
-<summary><b>🤖 AI Copilot APIs</b></summary>
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/ai/chat` | Chat with Groq LLM |
-| `GET` | `/api/ai/analyze/{id}` | Deep analysis of a shadow purchase |
-| `GET` | `/api/ai/summarize` | Executive risk summary (Cohere) |
-| `GET` | `/api/ai/vendor-insight/{vendor}` | AI vendor risk assessment |
-| `GET` | `/api/ai/health` | Groq & Cohere connectivity status |
-
-</details>
-
-<details>
-<summary><b>⚡ Action & Operations APIs</b></summary>
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/shadows/{id}/resolve` | Convert shadow to approved PO |
-| `POST` | `/api/shadows/{id}/dismiss` | Dismiss shadow alert |
-| `GET` | `/api/priority-queue` | AI-ranked priority queue |
-| `GET` | `/api/recommendations` | AI action recommendations |
-| `POST` | `/api/feedback` | Submit human feedback |
-| `GET` | `/api/trends` | Weekly trend analysis |
-| `POST` | `/api/ml/retrain` | Manual ML model retrain |
-| `GET` | `/api/ml/status` | Model version & feature weights |
-| `GET` | `/api/analytics/dept-risk` | Department risk heatmap |
-| `GET` | `/api/supplier-network` | Vendor collusion network graph |
-| `POST` | `/api/import/csv` | Batch CSV/Excel ingestion |
-| `POST` | `/api/demo/reset` | Reset to exhibition state |
-
-</details>
-
-<details>
-<summary><b>📄 Export APIs</b></summary>
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/download/shadow-report` | PDF executive risk report |
-| `GET` | `/api/download/csv` | CSV data export |
-| `GET` | `/api/v2/generate-report` | Comprehensive PDF report |
-
-</details>
-
-<details>
-<summary><b>🔧 System APIs</b></summary>
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/set-mode` | Switch Synthetic/Production datasets |
-| `POST` | `/api/simulator/start` | Start real-time transaction simulator |
-| `POST` | `/api/simulator/stop` | Pause transaction simulator |
-| `WebSocket` | `/ws` | Real-time updates (stats, alerts, shadows) |
-
-</details>
-
----
-
-## 📁 Project Structure
-
-```
-Shadow-Supply-Chain/
-│
-├── 🚀 Core Application
-│   ├── app.py                      # FastAPI server (4000+ lines) — routes, WebSocket, auth, simulator
-│   ├── database.py                 # SQLAlchemy ORM models (11 tables) & DB initialization
-│   ├── detection.py                # Shadow Detection Engine — PO matching, scoring, vendor trust
-│   ├── ai_module.py                # ML pipeline — Isolation Forest, feature engineering, NLP
-│   ├── ai_copilot.py               # Dual-LLM Copilot — Groq chat + Cohere summarization
-│   ├── analytics.py                # Predictive department risk scoring engine
-│   ├── preventive_intelligence.py  # Auto-PO drafting & prevention layer
-│   ├── vendor_graph.py             # Vendor collusion network graph analysis
-│   ├── recalibration.py            # ML model recalibration with human feedback
-│   └── pdf_generator.py            # Executive PDF report generation
-│
-├── 🔗 Connectors
-│   ├── connectors/sap.py           # SAP BAPI connector (live RFC + simulation fallback)
-│   └── connectors/push.py          # Firebase Cloud Messaging push notifications
-│
-├── 📊 Data Layer
-│   ├── generate_data.py            # Synthetic dataset generator (50+ transactions, 21 vendors)
-│   ├── production_data.py          # Real-world SF infrastructure scenarios
-│   ├── upgrade_db.py               # Database migration scripts
-│   └── data/                       # CSV datasets (transactions, POs, vendors, inventory)
-│
-├── 🎨 Frontend
-│   ├── static/index.html           # Main dashboard SPA
-│   ├── static/app.js               # Frontend logic (2500+ lines)
-│   ├── static/styles.css           # "Kinetic Ledger" design system
-│   └── static/downloads/           # Generated PDF/CSV exports
-│
-├── 🐳 DevOps
-│   ├── Dockerfile                  # Multi-stage container build
-│   ├── docker-compose.yml          # Full stack (app + PostgreSQL)
-│   ├── .github/workflows/ci.yml    # CI/CD — tests, security audit, Docker build
-│   ├── render.yaml                 # Render.com deployment config
-│   └── build.sh                    # Cloud build script
-│
-├── 🧪 Testing
-│   ├── test_api.py                 # API integration test suite
-│   ├── e2e_test.py                 # End-to-end system verification
-│   ├── test_exports.py             # Export functionality tests
-│   └── test_feedback.py            # Human feedback loop tests
-│
-├── 📋 Documentation
-│   ├── README.md                   # This file
-│   ├── DEMO.md                     # Exhibition demo cheat sheet
-│   ├── MODEL_CARD.md               # Detailed ML architecture documentation
-│   ├── SECURITY.md                 # SOC 2 audit readiness & security guide
-│   └── FIXES_APPLIED.md            # Changelog of patches applied
-│
-├── 🔧 Configuration
-│   ├── .env.example                # Environment variable template
-│   ├── requirements.txt            # Pinned Python dependencies
-│   └── .gitignore                  # Git exclusion rules
-│
-└── 🛠️ Dev Scripts
-    └── _dev_scripts/               # Debug utilities, encoding fixers, DB checkers
-```
-
----
-
-## 🏗️ Technology Stack
-
-<table>
-<tr>
-<td valign="top" width="50%">
-
-### ⚙️ Backend
-| Technology | Purpose |
-|-----------|---------|
-| **Python 3.11** | Core language |
-| **FastAPI 0.115** | Async web framework |
-| **SQLAlchemy 2.0** | Type-safe ORM |
-| **SQLite / PostgreSQL** | Dev / Production DB |
-| **Scikit-learn 1.5** | Isolation Forest ML |
-| **Pandas 2.2** | Feature engineering |
-| **Uvicorn / Gunicorn** | ASGI server |
-| **APScheduler** | Scheduled tasks |
-| **Cryptography** | Fernet encryption |
-| **SlowAPI** | Rate limiting |
-
-</td>
-<td valign="top" width="50%">
-
-### 🎨 Frontend & AI
-| Technology | Purpose |
-|-----------|---------|
-| **HTML5 / CSS3 / JS** | Zero-framework SPA |
-| **Chart.js 4.4** | Interactive visualizations |
-| **WebSocket** | Real-time updates |
-| **Inter Font** | Premium typography |
-| **Groq** (LLaMA 3.3 70B) | Chat & deep analysis |
-| **Cohere** (Command A) | Summaries & insights |
-| **FPDF2** | PDF report generation |
-| **OpenPyXL** | Excel exports |
-| **Firebase Admin** | Mobile push notifications |
-| **pyrfc** *(optional)* | SAP live connection |
-
-</td>
-</tr>
-</table>
-
----
-
-## 🔐 Security & Compliance
-
-ShadowSync ships with a comprehensive [Security Guide](SECURITY.md) including:
-
-- ✅ JWT session authentication with configurable TTL
-- ✅ RBAC — `admin`, `analyst`, `auditor` roles
-- ✅ Fernet field-level encryption (`FIELD_ENCRYPTION_KEY`)
-- ✅ All secrets via environment variables (never hardcoded)
-- ✅ Complete audit trail with action logging
-- ✅ Auto-purge of records older than 7 years (GDPR/SOC 2)
-- ✅ CORS restriction via `ALLOWED_ORIGINS`
-- ✅ CI/CD security audit with `pip-audit`
-- ✅ Docker health checks with graceful failure handling
-
----
-
-## 🔑 Environment Variables
-
-| Variable | Required | Description |
-|----------|:--------:|-------------|
-| `ADMIN_USERNAME` | ✅ | Dashboard login username |
-| `ADMIN_PASSWORD` | ✅ | Dashboard login password |
-| `GROQ_API_KEY` | ✅ | Groq LLM API key |
-| `COHERE_API_KEY` | ✅ | Cohere API key |
-| `DATABASE_URL` | — | PostgreSQL URL (defaults to SQLite) |
-| `FIELD_ENCRYPTION_KEY` | 🔶 | Fernet key for field encryption |
-| `ALLOWED_ORIGINS` | 🔶 | CORS whitelist (comma separated) |
-| `IOT_API_KEY` | 🔶 | Pre-shared key for IoT scanner devices |
-| `SLACK_WEBHOOK_URL` | — | Slack alerts webhook |
-| `ALERT_EMAIL_USER` / `_PASS` / `_TO` | — | Email alert configuration |
-| `FIREBASE_CREDENTIALS_PATH` | — | FCM push notification credentials |
-| `SAP_HOST` / `SAP_USER` / `SAP_PASSWORD` | — | SAP live connector |
-
-> 🔶 = Recommended for production
-
----
-
-## 🖥️ Dashboard Overview
-
-| Tab | Description |
-|-----|-------------|
-| **Overview** | Stats cards, 4 interactive charts, live feed, urgent actions, trend insights |
-| **Priority Queue** | AI-ranked shadows by severity — Critical → High → Medium → Low |
-| **Telemetric Alerts** | Shadow detections with approve/review/reject actions |
-| **Transactions** | Full financial ledger with shadow flags |
-| **Procurement** | Approved POs from ERP system |
-| **Vendors & Risk** | Vendor registry with trust scores & collusion rings |
-| **Inventory** | Stock levels, reorder alerts, auto-PO badges |
-| **Analytics** | Department trends, predictive risk scoring |
-| **Audit Trail** | Complete compliance action log |
-| **AI Copilot** | Conversational LLM interface with provider status |
-
----
-
-## 🔮 Roadmap
-
-- [x] ~~Docker containerization~~ ✅
-- [x] ~~CI/CD with GitHub Actions~~ ✅
-- [x] ~~SAP BAPI connector~~ ✅
-- [x] ~~Multi-channel alerts (Email/Slack/Push)~~ ✅
-- [x] ~~PostgreSQL production support~~ ✅
-- [x] ~~SOC 2 security compliance~~ ✅
-- [x] ~~Predictive department risk analytics~~ ✅
-- [ ] OAuth 2.0 / SAML enterprise SSO
-- [ ] React Native mobile approval app
-- [ ] Predictive seasonal spend forecasting
-- [ ] Multi-currency global procurement
-- [ ] Kubernetes Helm chart deployment
-
----
-
-## 🧪 Testing
-
+### 2. Configure Environment (Optional)
 ```bash
-# Run API integration tests
-python test_api.py
+# Copy example configuration
+cp .env.example .env
 
-# Run end-to-end verification
-python e2e_test.py
+# Set your Groq API key for the live AI copilot (optional; intelligent offline fallback included)
+GROQ_API_KEY=gsk_your_groq_key_here
 
-# Run export tests
-python test_exports.py
+# Enable background telemetry stock simulation (default: false)
+SIMULATOR_ENABLED=false
 ```
 
-CI/CD runs automatically on push to `main` or `develop` via [GitHub Actions](.github/workflows/ci.yml) — includes dependency security audit, API tests, and Docker build verification.
+### 3. Start the Server
+```bash
+uvicorn app:app --reload
+```
+Navigate to:
+- **Dashboard UI**: [http://localhost:8000](http://localhost:8000)
+- **Login Page**: [http://localhost:8000/login](http://localhost:8000/login)
+
+### 🔐 Role-Based Access Control (RBAC) Credentials:
+
+| Role | Username | Password | Permissions & Scope |
+| :--- | :--- | :--- | :--- |
+| **Store Director (Admin)** | `admin` | `admin@2026` | Full system access, catalog creation, vendor management, system resets |
+| **Procurement Manager** | `manager` | `manager@2026` | PO creation & approval, valuation reports, supplier analysis |
+| **Storekeeper** | `storekeeper` | `storekeeper@2026` | Stock In (GRN), Stock Out (Dispatch), Cycle adjustments, bin maintenance |
 
 ---
 
-## 📊 Key Metrics
+## ⚙️ Environment Variables & Configuration
 
-<div align="center">
+Configure these parameters in your `.env` file or runtime container environment:
 
-| Metric | Value |
-|--------|-------|
-| 🕐 Shadow Detection Speed | **< 1 second** |
-| 🤖 Groq LLM Response Time | **~200ms** |
-| 🎯 ML Baseline Accuracy | **85%+** |
-| 📊 Engineered Features | **10+** |
-| 🗄️ Database Tables | **11** |
-| 📡 API Endpoints | **35+** |
-| 📝 Lines of Code | **10,000+** |
-
-</div>
-
----
-
-## 👥 Team
-
-Built by the **ShadowSync Engineering Team** as an enterprise supply chain intelligence platform.
+| Variable | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `SIMULATOR_ENABLED` | boolean | `false` | When `true`, background consumption simulation runs automatically on startup. Keep `false` in production. |
+| `ALLOW_TEST_ROLE_HEADER` | boolean | `false` | When `true`, accepts `X-User-Role` test header bypass. **Must remain `false` in production** (used exclusively for test automation). |
+| `GROQ_API_KEY` | string | `""` | Groq cloud API key powering the LLaMA 3.3 welding technical copilot. If omitted, local offline advisory rules handle queries. |
+| `VISION_MODEL` | string | `llama-3.2-11b-vision-preview` | Vision-capable LLM model used for OCR extraction of supplier delivery documents (challans/invoices). |
+| `DATABASE_URL` | string | `sqlite:///./anishka_inventory.db` | SQLAlchemy connection string. Set to PostgreSQL in enterprise multi-node environments. |
+| `ALLOWED_ORIGINS` | string | `http://localhost:8000,...` | Comma-separated CORS whitelist origins allowed to query the API. |
+| `SMTP_HOST` | string | `""` | SMTP mail server hostname for dispatching approved purchase order PDFs to suppliers. |
+| `SMTP_PORT` | integer | `587` | Outbound SMTP submission port (TLS). |
+| `SMTP_USER` | string | `""` | Outbound SMTP authentication username. |
+| `SMTP_PASS` | string | `""` | Outbound SMTP authentication password. |
+| `SMTP_FROM` | string | `orders@anishkaindustries.com` | From-address for supplier purchase order notification emails. |
 
 ---
 
-<div align="center">
+## 🤖 Autonomous Replenishment & Automation Settings
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=0:0d1117,50:161b22,100:1f6feb&height=120&section=footer" width="100%"/>
+These operational rules are managed live via `GET/PUT /api/settings/automation` or the Automation Engine tab:
 
-**ShadowSync v7.0 — Exhibition Final**
+| Setting Key | Type | Default | Operational Impact |
+| :--- | :--- | :--- | :--- |
+| `auto_reorder_enabled` | boolean | `true` | Enables scheduled periodic scanning for items needing replenishment (LOW, CRITICAL, OUT). |
+| `scan_interval_minutes` | integer | `5` | Background cycle scan interval in minutes (APScheduler AsyncIOScheduler). |
+| `smart_qty_enabled` | boolean | `true` | Calculates suggested order size based on 30-day velocity, supplier lead time, and safety buffer. |
+| `safety_days` | integer | `14` | Safety stock buffer days added to supplier lead time during replenishment order sizing. |
+| `auto_approve_enabled` | boolean | `false` | When `true`, automatically promotes generated draft POs to `APPROVED` if criteria are satisfied. |
+| `auto_approve_limit` | float | `25000.0` | Maximum PO monetary value (in ₹) eligible for autonomous system approval. |
+| `auto_approve_min_supplier_rating`| float | `4.0` | Minimum vendor quality rating required for autonomous PO approval. |
+| `overdue_alerts_enabled` | boolean | `true` | Scans for approved POs past expected delivery date and broadcasts daily real-time alerts. |
+| `email_on_approval` | boolean | `true` | Automatically queues order email with attached PO PDF into the Outbox upon PO approval. |
+| `digest_time` | string | `08:00` | Scheduled daily generation time for 24-hour executive summary digest. |
 
-*Protecting procurement integrity through AI-powered intelligence*
+---
 
-<p>
-  <img src="https://img.shields.io/badge/Made_with-Python-3776AB?style=flat-square&logo=python&logoColor=white" />
-  <img src="https://img.shields.io/badge/Powered_by-FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white" />
-  <img src="https://img.shields.io/badge/AI_by-Groq_+_Cohere-F55036?style=flat-square" />
-</p>
+---
 
-</div>
+## 🛒 Sales & Customer Commercial Module
+
+The sales module enables Anishka Industries to issue commercial quotations, manage firm industrial sales orders, reserve warehouse stock, execute partial/full dispatches, and generate GST-compliant tax invoices:
+
+### 1. Customer Management & Credit Limits
+- **Industrial Directory:** Seeded with 12 major automotive, robotic, and heavy fabrication clients across Haryana, Delhi-NCR, and Maharashtra (Pune).
+- **Credit Limit & Terms Control:** Dynamic tracking of sanctioned credit limits, payment terms (e.g. Net 30/45 days), and current outstanding balances.
+- **Credit Blocking & Manager Override:** Prevents order confirmation if order total exceeds available credit line, unless an authorized manager or admin provides an explicit override reason stored in the audit log.
+- **Customer Statement of Account:** Full transaction ledger tracking debit (invoices) and credit (payments received) with a continuous running balance.
+
+### 2. Order Lifecycle & Warehouse Stock Reservation
+- **Quote → Confirm:** Creating a quotation does not reserve stock. Upon order confirmation by manager/admin, inventory is reserved (`reserved_qty`).
+- **Available Stock Calculation:** Across the entire system (item drawer, status evaluation, auto-reorder, and stock health), stock availability strictly respects `available = quantity - reserved_qty`.
+- **Order Cancellation:** Cancelling a confirmed order automatically releases reserved stock back into available inventory.
+
+### 3. Warehouse Dispatch & Outward Movements
+- **Role-Based Dispatch:** Storekeepers have permission to record warehouse dispatches against confirmed orders.
+- **Partial Dispatch Support:** Dispatches can be fulfilled in batches; items generate authentic `OUT` stock movement records referencing the sales order and delivery challan.
+
+### 4. Indian GST Compliance & Tax Invoices
+- **HSN Codes & Tax Rates:** Supports 6/8-digit HSN/SAC codes (e.g. `8466` for machine tool parts) and configurable GST rates (5%, 12%, 18%, 28%).
+- **Intra-State vs Inter-State Tax Engine:**
+  - *Intra-state (Haryana to Haryana):* Split equally into **CGST** and **SGST** (e.g. 9% + 9%).
+  - *Inter-state (Haryana to other states):* Applied wholly as **IGST** (e.g. 18%).
+- **Sequential Fiscal Numbering:** Invoices follow the financial year format `ANI/YYYY-YY/NNNN` (e.g. `ANI/2026-27/0001`), immutable and never reused.
+- **Professional PDF Documents:**
+  - **Commercial Quotation PDF:** Official Anishka Industries letterhead, validity date, commercial terms, and line item breakdown.
+  - **GST Tax Invoice PDF:** Formal tax invoice with supplier GSTIN (`COMPANY_GSTIN`), place of supply, taxable amounts, CGST/SGST/IGST breakdown, payment status, bank NEFT/RTGS coordinates, and amount in Indian currency words (Rupees and Paise).
+
+### 5. Accounts Receivable Ageing
+- Executive dashboard card categorizing all unpaid and partially paid customer invoices into standard financial ageing buckets:
+  - **Current (0–30 Days):** Invoices within standard trade credit cycle.
+  - **Due (31–60 Days):** Invoices requiring follow-up.
+  - **Overdue (60+ Days):** High-risk receivables requiring collection escalation.
+  - **Total Outstanding:** Total pending customer debt.
+
+---
+
+## 🚀 Production Deployment Checklist
+
+Prior to deploying Anishka Inventory into a production plant or warehouse:
+
+- [ ] **1. Change Default Passwords**: Update passwords for `admin`, `manager`, and `storekeeper` in database / seed config.
+- [ ] **2. Disable Test Role Header**: Ensure `ALLOW_TEST_ROLE_HEADER=false` is set in production environment variables.
+- [ ] **3. Turn Off Telemetry Simulator**: Verify `SIMULATOR_ENABLED=false` so synthetic consumption events do not alter live factory stock.
+- [ ] **4. Restrict CORS Origins**: Update `ALLOWED_ORIGINS` to only permit your organization's verified domain and internal intranet URLs.
+- [ ] **5. Outbound Mail Server**: Configure `SMTP_HOST`, `SMTP_USER`, and `SMTP_PASS` if automated supplier email dispatch is required.
+- [ ] **6. Production Database**: For high concurrency, configure `DATABASE_URL` pointing to PostgreSQL with automated snapshot backups.
+- [ ] **7. Reverse Proxy & HTTPS**: Deploy behind Nginx or Caddy with valid SSL/TLS certificates and WebSocket reverse proxying (`Upgrade` header forwarding).
+
+---
+
+## 🤖 AI Technical Copilot Agent with Tool Calling & SSE
+
+Anishka Inventory features a grounded, industrial-grade AI agent powered by Groq LLM tool calling (with a domain-specific fallback engine when no API key is configured).
+
+### Key Agent Capabilities
+1. **Tool Calling & JSON Schemas:**
+   - **READ Tools (Executed Immediately):** `search_items(query)`, `get_item(sku)`, `get_low_stock()`, `get_forecast(sku)`, `list_open_pos()`, `get_supplier(name)`, `get_dead_stock()`, `get_customer(name)`, `get_receivables()`.
+   - **WRITE Tools (Propose Only — Never Auto-Execute):** `create_draft_po`, `stock_out`, `create_quote_draft`, `apply_reorder_level`. Rather than mutating data directly, write tools return a `proposed_action` object. The UI renders an interactive confirmation card, and only on user click calls the standard REST endpoint with `X-Via-AI: true`, attributing the audit log to `"<username> via AI"`.
+2. **Strict Factual Grounding & Prompt Injection Defense:**
+   - Temperature locked at `0.2` for deterministic responses.
+   - Text from the database is treated strictly as data, never as executable instructions.
+   - Grounding: every factual claim cites real warehouse SKUs, PO numbers, and current balances.
+   - Conversation history maintains the last 10 turns per user session.
+3. **SSE Streaming & Telemetry:**
+   - Full Server-Sent Events (`text/event-stream`) streaming for real-time token delivery and tool call activity badges.
+   - Token usage and latencies logged per request in the `ai_chat_logs` database table.
+   - Live telemetry dashboard in Settings (configured model, status, request count, tokens logged, top user).
+4. **Multilingual & Voice Support:**
+   - Native comprehension and response generation in **English**, **Hindi (Devanagari)**, and **Hinglish**.
+   - Speech-to-text mic button powered by the browser's native **Web Speech API** (`en-IN` and `hi-IN` toggles).
+   - Bilingual suggestion chips for quick one-click prompts.
+5. **Automated Evaluation Suite (`ai_eval.py`):**
+   - 28 automated test questions testing stock queries, write proposals, Hindi, Hinglish, welding metallurgy (CuCrZr vs E-Cu, tungsten grades, wire liners), prompt injection safety, and out-of-scope queries.
+   - Runs against both live Groq models or the intelligent grounded fallback with full pass/fail reporting and scoring.
+
+---
+
+## 📷 Scan Delivery Document (AI Vision OCR & PO Cross-Referencing)
+
+Anishka Inventory includes an intelligent delivery document scanning workflow on the Purchase Orders tab accessible to **Storekeepers, Managers, and Admins**:
+
+### 1. Document Upload & Secure Storage
+- **File Types & Size:** Accepts photos (`JPEG`, `PNG`, `WebP`) and digital `PDF`s up to 10 MB.
+- **Content Hashing:** Saves uploaded documents in `uploads/` named by SHA-256 content hash (`<hash>.<ext>`) preventing collisions and duplicate storage.
+- **Secure File Serving:** Uploaded files are served strictly via authenticated endpoints (`GET /api/uploads/{filename}`). Unauthenticated requests receive HTTP 401.
+
+### 2. Vision OCR & Pydantic Validation
+- **Model:** Leverages the vision model configured by `VISION_MODEL` (`llama-3.2-11b-vision-preview` by default).
+- **Strict JSON Schema:** Extracts `supplier_name`, `document_number`, `document_date`, `po_reference`, and line items (`description`, `sku`, `qty`, `unit_price`, `gst_rate`).
+- **Resilient Validation:** Validates output against Pydantic model `DeliveryDocExtraction` with an automatic 1-turn retry if the model returns malformed JSON.
+
+### 3. Cross-Reference Matching & Discrepancy Detection
+- **PO Matching:** Locates open POs (`APPROVED`, `PARTIALLY_RECEIVED`, `DRAFT`) using PO reference number or supplier name matching.
+- **Line Matching:** Matches each extracted line item to open PO lines:
+  1. Exact SKU matching (confidence: `HIGH`).
+  2. Token similarity matching using `_tokenize` from `preventive_intelligence.py` (confidence: `HIGH` or `MEDIUM`).
+  3. Items with low/no overlap are marked `LOW` / `NOT ON PO`.
+- **Automated Discrepancy Flags:**
+  - `⚠️ Quantity Mismatch`: Highlighted when delivered quantity differs from pending PO quantity (short or over delivery).
+  - `⚠️ Price Variance (>5%)`: Highlighted when invoiced unit rate differs from PO rate by more than 5%.
+  - `⚠️ Not on PO`: Flags unauthorized extra items present on the document but absent from the PO.
+  - `🚨 Duplicate Document`: Warns if the document number was previously recorded/received.
+
+### 4. Interactive Review & Human-in-the-Loop Confirmation
+- **Mandatory Human Verification:** Nothing is received into inventory without storekeeper/manager confirmation.
+- **Verification UI:** Displays extracted lines side-by-side with expected PO lines, editable receive quantities, and warning badges.
+- **Correction Audit Ledger:** User edits to receive quantities or line mappings are logged in the `DocExtraction` table (`fields_corrected`).
+- **One-Click Receiving:** On confirmation, updates inventory balances, marks PO as `RECEIVED` or `PARTIALLY_RECEIVED`, attaches document path and challan number, and writes an immutable `DOC_SCANNED_RECEIVE` audit entry.
+
+### 5. Demo Safety & Bundled Sample Documents
+When running offline or without `GROQ_API_KEY`, the system operates in demo mode using canned extractions for 3 bundled sample documents generated with `fpdf2` in `static/samples/`:
+1. `sample_challan_clean.pdf`: Clean shipment from Abicor Binzel for `ANI-PO-2026-0008` (100% match).
+2. `sample_challan_short.pdf`: Partial shipment from Ador Welding for `ANI-PO-2026-0007` (300/450 units sent).
+3. `sample_invoice_price_hike.pdf`: Invoice from Abicor Binzel with +16.2% price variance and an extra unapproved item.
+- Accessible via a 1-click **"Try a sample document"** button in the scan modal.
+
+### 6. Accuracy Analytics
+- `GET /api/procurement/scan-document/accuracy` reports first-pass accuracy rate (extractions confirmed with 0 manual edits), average corrections per document, and total documents processed.
+
+---
+
+## 🏛️ Application Architecture & Tab Structure
+
+Anishka Inventory utilizes an 8-tab operational layout built on the Kinetic Ledger design system:
+
+| Tab | Feature | Description |
+| :--- | :--- | :--- |
+| **1. Dashboard** | Executive Command Center | Real-time valuation KPIs, active SKU counter, low stock alert feed, accounts receivable ageing card (0-30, 31-60, 60+ days), and category valuation charts. |
+| **2. Inventory** | Welding Spares Catalog | Searchable, filterable catalog with live stock counts, reserved stock, HSN/SAC codes, GST rates, bin locations, and instant stock adjustments. |
+| **3. Stock Movements** | Ledger of Inward & Dispatches | Real-time chronological audit chain tracking goods receipts (GRN), shop floor issues, sales dispatches, and returns. |
+| **4. Purchase Orders** | Supplier Procurement | PO raising with approved OEMs with downloadable Indian GST-compliant PDF POs and email dispatch. |
+| **5. Sales & Quotes** | Sales Orders & Invoicing | Industrial sales order lifecycle (Quote → Confirmed → Dispatched → Invoiced), GST split (CGST+SGST / IGST), margin analysis, and quotation PDFs. |
+| **6. Customers** | Industrial Customer Accounts | Customer directory across Delhi-NCR, Haryana & Pune with GSTIN verification, credit limits, terms, and running ledger statements. |
+| **7. Suppliers** | Supplier & OEM Directory | Directory of authorized welding equipment manufacturers and distributors with reliability metrics and contact info. |
+| **8. Reports** | Data Export Central | Single-click exports: Executive Valuation PDF, Dead Stock analysis, Multi-Sheet Excel Workbook (`.xlsx`), and CSV ledgers. |
+| **9. AI Assistant** | Anishka AI Copilot | Conversational AI for technical welding torch advisory, wire compatibility, and reorder advisory. |
+| **10. Audit Trail** | Compliance History | Immutable cryptographic log of administrative actions, logins, stock edits, dispatches, and sales transactions. |
+
+---
+
+## 🛠️ Technology Stack
+
+- **Backend:** FastAPI (Python 3.11 – 3.14)
+- **Database:** SQLite with SQLAlchemy ORM (WAL mode enabled; Postgres-compatible)
+- **Real-Time Layer:** Native WebSockets with live client broadcast
+- **Frontend:** Vanilla JavaScript SPA (Zero node/npm build dependency)
+- **Design System:** Kinetic Ledger (Navy Authority `#00234B`, Teal `#006A6A`, Amber `#FFBF00`, Dark/Light OLED mode)
+- **Visual Analytics:** Chart.js 4.4
+- **Document Engine:** FPDF2 (PDF generation) and openpyxl (Excel exports)
+- **AI Engine:** Groq API (`qwen/qwen3.8-27b`) with domain-specific technical fallback
+
+---
+
+## 🏢 Business Information
+
+**Anishka Industries**  
+Milestone Khandsa Road, Sector-10, Gurugram - 122001, Haryana, India  
+Phone: +91 124 428 9000  
+Email: sales@anishkaindustries.com  
+GSTIN: 06AAACA1234F1Z5  
+License: Proprietary Commercial Software · © 2026 Anishka Industries
+
+
+---
+
+## Tally Prime / ERP 9 Voucher Import Guide
+
+> **Configure Ledger Mappings First**: Before exporting, go to **Reports → Business Reports → Tally XML & CSV Export** and set the Tally ledger names to exactly match your company's Chart of Accounts in Tally Prime.
+
+### Step-by-Step Import Instructions
+
+1. **Export from Anishka ERP**
+   - Navigate to **Reports → Business Reports → Tally XML & CSV Export**
+   - Select the date range and voucher type (Sales, Purchase, or Both)
+   - Click **Export Tally XML** (recommended) or **Export Tally CSV**
+
+2. **Configure Ledger Mappings** (one-time setup)
+   - In the same screen, fill in the **Tally Ledger Configuration** form
+   - Match each field to the exact ledger name in Tally Prime (case-sensitive)
+   - Click **Save Ledger Mappings**
+
+3. **Import into Tally Prime**
+   - Open Tally Prime and select your company
+   - Press Alt + O → select **Import** → select **Vouchers**
+   - Browse to and select the downloaded .xml file
+   - Press **Enter** to begin import
+
+4. **For Tally ERP 9** (older versions)
+   - Go to **Gateway of Tally → Import Data → Vouchers**
+   - Select the XML file and press **Enter**
+
+5. **Verify Import**
+   - Check the import log at Tally installation folder: Tally.imp
+   - In Tally, verify Day Book for the imported date range
+   - Cross-check totals with the GST Sales/Purchase Register from Anishka ERP
+
+### Tally CSV Format
+
+The CSV export follows Tally Prime's standard ledger-wise CSV import format with columns:
+Date, Voucher Type, Voucher No, Ledger Name, Debit, Credit, Narration
+
+### Notes
+
+- Tally XML uses UTF-8 encoding. Do not open in Excel before importing.
+- Each sales invoice creates one **Sales** voucher with CGST/SGST/IGST tax ledger entries.
+- Each purchase order creates one **Purchase** voucher with input tax credit entries.
+- Round-off amounts (if any) are posted to the configured Round-Off ledger.
+- The ISDEEMEDPOSITIVE flag is set automatically (Yes for Debit, No for Credit).
+
+
+## 📈 Business Impact & Pilot ROI Module
+
+Designed for executive management, prospective enterprise buyers, and pilot assessment teams, the **Business Impact** module (`/api/business-impact/*`) provides quantitative transparency into operational ROI, empirical pilot measurements, and SaaS subscription unit economics.
+
+### 1. ROI Calculator with Transparent & Editable Formulas
+- **Zero Invention Guarantee**: Default inputs are empty placeholders labelled *"replace with Anishka's real numbers"*. No fabricated figures appear until calculated by the user.
+- **Operational Baseline Inputs**:
+  - Active SKUs in catalog
+  - Monthly customer orders
+  - Hours per week spent on stock counts and manual PO drafting
+  - Monthly stockout incidents
+  - Average Order Value (AOV in ₹)
+  - Total inventory valuation (₹)
+  - Staff / warehouse labor hourly cost (₹)
+- **Visible & Editable Formula Multipliers**:
+  - Time Reduction Rate ($65\%$)
+  - Stockout Reduction Rate ($70\%$)
+  - Order Loss Rate upon Stockout ($40\%$)
+  - Gross Margin on Spares ($25\%$)
+  - Annual Holding Cost Rate ($18\%/	ext{yr}$)
+  - Dead Stock Cash Release Rate ($15\%$)
+  - Reference Annual Software Cost ($	ext{₹}75,000$)
+- **Outputs**:
+  - Annual Labor Savings (₹ and hours saved)
+  - Revenue & Margin Protected (₹ and stockouts avoided)
+  - Working Capital Released (₹ cash unlocked and annual holding savings)
+  - Payback Period & Net ROI Multiple ($X	imes$ return)
+  - **Full Mathematical Audit Trail**: Every equation is displayed with the exact arithmetic substituted for review by financial teams.
+
+### 2. Pilot KPI Tracker (Before vs. After)
+- Tracks empirical operational performance before and after pilot deployment across 5 core workflows:
+  1. **Stockout Incidents per Month** (Baseline: 18.0 $	o$ Measured: 4.0, *Improved*)
+  2. **Time to Create a PO** (Baseline: 35.0 mins $	o$ Measured: 3.0 mins, *Improved*)
+  3. **Time to Receive Goods** (Baseline: 45.0 mins $	o$ Measured: 8.0 mins, *Improved*)
+  4. **Cycle Count Inventory Accuracy** (Baseline: 78.5% $	o$ Measured: 98.2%, *Improved*)
+  5. **Sales Invoice Turnaround Time** (Baseline: 24.0 hrs $	o$ Measured: 1.5 hrs, *Improved*)
+- **Dynamic Comparative SVG Chart**: Horizontal dual-bar visual comparison comparing baseline (gray) against post-pilot measurement (green/red) without external CDN dependencies.
+- **Full CRUD API & Modals**: Create custom KPIs, update measured pilot readings, assign targets, and record observations with audit logging.
+
+### 3. SaaS Subscription Pricing & Unit-Economics Calculator
+- **Configurable Subscription Tiers** (`GET /api/business-impact/pricing-plans`):
+  - **Starter Workshop**: $	ext{₹}4,999/	ext{mo}$ (3 users, 500 SKUs, mobile PWA, POs, digest).
+  - **Industrial Growth (Popular)**: $	ext{₹}9,999/	ext{mo}$ (10 users, unlimited SKUs, Statsmodels forecasting, WhatsApp notifications, GST registers).
+  - **OEM Enterprise**: $	ext{₹}19,999/	ext{mo}$ (Unlimited users/SKUs, Tally Prime XML/CSV sync, OCR 3-way match, dedicated DB).
+- **Unit Economics Engine**:
+  - Models direct variable costs (Cloud DB hosting, LLM tokens, WhatsApp Cloud API, customer support).
+  - Calculates gross profit per customer, gross margin %, break-even customer count, and annual ARR contribution.
+
+---
+
+## 🛡️ Pilot Readiness & Enterprise Security
+- **Argon2id & bcrypt Hashing**: High-entropy password hashing with automatic legacy hash migration on login.
+- **Login Rate Limiting & Account Lockout**: SlowAPI rate limiting (5 attempts/minute) with progressive lockout.
+- **Session Security**: Cookie flags (`SameSite=Lax`, `HttpOnly`, `Secure` when HTTPS), session tokens, and security headers (`X-Frame-Options`, `X-Content-Type-Options`, `Content-Security-Policy`).
+- **User Management**: Admin interface for creating users, role assignment (`admin`, `manager`, `storekeeper`), password reset, and activation toggle.
+- **Backup & Hot Restore**: Nightly hot backups for SQLite WAL and PostgreSQL (`pg_dump`), configurable retention, single-click zip/database download, and audited atomic restore.
+- **Data Import Wizard**: CSV and Excel catalog/supplier/stock importer with column mapping, preview, row-level validation, and one-click batch rollback via `ImportBatch`.
+- **System Health & Observability**: `/api/health` reporting database engine, latency, scheduler heartbeat, and disk capacity; structured JSON request logging.
+- **Test Suite**: 255/255 passing tests spanning unit calculations, API integration, and RBAC enforcement.

@@ -39,7 +39,6 @@ static/downloads/*.xlsx
 test_download.pdf
 
 # ─── Test Files ────────────────────────────────
-test_*.py
 debug_*.py
 verify_*.py
 
@@ -53,3 +52,9 @@ verify_*.py
 Thumbs.db
 
 # ─── Misc ─────────────────────────────────────
+
+# Backups and archives
+backup_*/
+static_*backup/
+_archive/
+uploads/

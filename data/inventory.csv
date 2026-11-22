@@ -1,17 +1,33 @@
 id,name,sku,quantity,unit_price,category,reorder_level,location
-INV001,Hydro-Pump XL,HP-XL-001,15,1200.0,Pumps,5,Warehouse A
-INV002,Steel Bolt M10x40,SB-M10-40,2500,0.45,Fasteners,500,Warehouse B
-INV003,Control Board Rev3,CB-R3-001,8,450.0,Electronics,3,Warehouse A
-INV004,HVAC Filter 20x25,HF-2025,45,32.0,HVAC,20,Warehouse C
-INV005,Bearing 6205-2RS,BR-6205,120,12.5,Bearings,30,Warehouse B
-INV006,Safety Goggles Pro,SG-PRO,200,18.0,Safety,50,Warehouse C
-INV007,Hydraulic Hose 1/2in,HH-050,30,45.0,Hydraulics,10,Warehouse A
-INV008,Welding Rod E6013,WR-6013,500,3.2,Welding,100,Warehouse B
-INV009,PLC Module S7-1200,PLC-S7,4,850.0,Electronics,2,Warehouse A
-INV010,Conveyor Belt 6ft,CB-6FT,10,280.0,Conveyors,3,Warehouse A
-INV011,Gasket Set Industrial,GS-IND,85,22.0,Seals & Gaskets,25,Warehouse B
-INV012,Motor 2HP 3-Phase,MT-2HP,6,680.0,Motors,2,Warehouse A
-INV013,Pressure Gauge 0-100PSI,PG-100,35,28.0,Instrumentation,10,Warehouse C
-INV014,Lubricant ISO 68,LB-68,60,15.0,Chemicals,20,Warehouse B
-INV015,Steel Plate 4x8 Sheet,SP-4X8,25,180.0,Raw Materials,8,Warehouse D
-INV016,V-Belt A68,VB-A68,40,14.0,Power Transmission,15,Warehouse B
+INV001,MIG Contact Tip M6 CuCrZr 0.8mm,CT-M6-08,450,45.0,MIG Spares,100,Bin M-01
+INV002,MIG Contact Tip M6 CuCrZr 1.0mm,CT-M6-10,380,45.0,MIG Spares,100,Bin M-02
+INV003,MIG Contact Tip M8 CuCrZr 1.2mm,CT-M8-12,520,55.0,MIG Spares,150,Bin M-03
+INV004,MIG Contact Tip M8 CuCrZr 1.6mm,CT-M8-16,210,65.0,MIG Spares,50,Bin M-04
+INV005,MIG Conical Gas Nozzle MB 24KD,GN-MB24-C,140,185.0,MIG Spares,40,Bin M-08
+INV006,MIG Conical Gas Nozzle MB 36KD,GN-MB36-C,95,240.0,MIG Spares,30,Bin M-09
+INV007,MIG Ceramic Gas Diffuser MB 24KD,GD-MB24-CER,180,65.0,MIG Spares,50,Bin M-12
+INV008,MIG Brass Gas Diffuser MB 36KD,GD-MB36-BR,120,95.0,MIG Spares,35,Bin M-13
+INV009,MIG Steel Wire Liner 1.2mm x 4.5m,LN-ST-12-45,75,280.0,MIG Spares,20,Bin M-15
+INV010,MIG Teflon Liner for Al Wire 1.2mm,LN-TF-12-45,35,420.0,MIG Spares,15,Bin M-16
+INV011,MIG Torch MB 24KD Air-Cooled 3m,TR-MB24-3M,18,3450.0,Welding Torches,5,Rack T-01
+INV012,MIG Torch MB 36KD Heavy Duty 4m,TR-MB36-4M,14,4800.0,Welding Torches,4,Rack T-02
+INV013,MIG Torch MB 501D Water-Cooled 4m,TR-MB501-4M,8,8200.0,Welding Torches,3,Rack T-03
+INV014,TIG Tungsten Electrode 2% Thoriated 2.4mm (Red),TE-TH-24-RD,320,120.0,TIG Spares,80,Bin T-01
+INV015,TIG Tungsten Electrode 2% Ceriated 2.4mm (Grey),TE-CE-24-GY,240,135.0,TIG Spares,60,Bin T-02
+INV016,TIG Tungsten Electrode 1.5% Lanthanated 3.2mm (Gold),TE-LA-32-GD,150,195.0,TIG Spares,40,Bin T-03
+INV017,TIG Ceramic Alumina Gas Cup #6 (WP-17/18/26),GC-AL-06,260,35.0,TIG Spares,60,Bin T-06
+INV018,TIG Ceramic Alumina Gas Cup #8 (WP-17/18/26),GC-AL-08,220,38.0,TIG Spares,50,Bin T-07
+INV019,TIG Collet Body 2.4mm Gas Lens,CB-GL-24,85,160.0,TIG Spares,25,Bin T-09
+INV020,TIG Copper Collet 2.4mm,CL-CU-24,310,40.0,TIG Spares,80,Bin T-10
+INV021,TIG Torch WP-26 Air-Cooled 4m Flex,TR-WP26-4M,12,3100.0,Welding Torches,4,Rack T-04
+INV022,TIG Torch WP-18 Water-Cooled 4m,TR-WP18-4M,7,5600.0,Welding Torches,3,Rack T-05
+INV023,Robotic Torch Swan Neck 22 deg (Binzel ABIROB),RN-AB-22D,11,14500.0,Robotic Spares,3,RoboBay R-01
+INV024,Robotic Torch Swan Neck 45 deg (Fanuc/Panasonic),RN-FN-45D,9,16200.0,Robotic Spares,3,RoboBay R-02
+INV025,Robotic HD Contact Tip M8 1.2mm Ag-Plated,CT-RB-M8-12,340,110.0,Robotic Spares,75,RoboBay R-05
+INV026,Robotic Torch Cleaner Station Blade (16mm Reamer),RB-RM-16MM,15,3200.0,Robotic Spares,5,RoboBay R-08
+INV027,Robotic Anti-Spatter Injector Liquid (5L Canister),AS-INJ-5L,28,1450.0,Consumables,10,Chemical Bay C-01
+INV028,Robotic Corrugated Cable Conduit 2m,CC-RB-2M,16,4200.0,Robotic Spares,4,RoboBay R-09
+INV029,MIG Welding Wire Spool ER70S-6 1.2mm (15kg),WW-70S6-12,85,1850.0,Welding Wire & Filler,25,Pallet W-01
+INV030,MIG Stainless Wire Spool ER308L 1.2mm (12.5kg),WW-308L-12,42,4650.0,Welding Wire & Filler,15,Pallet W-02
+INV031,TIG Stainless Filler Rods ER316L 2.4mm (5kg Box),FR-316L-24,30,2200.0,Welding Wire & Filler,10,Rack F-01
+INV032,Anti-Spatter Spray Aerosol 500ml,AS-SP-500,160,220.0,Consumables,40,Bin C-03

@@ -1,145 +1,142 @@
-# ShadowSync — Exhibition Demo Cheat Sheet
-> **Print this. Laminate it. Have it on the table.**
+# Anishka Inventory — 5-Minute Demo Guide
+
+**Anishka Industries · Industrial Welding Spares Management**  
+Milestone Khandsa Road, Sector-10, Gurugram – 122001, Haryana
 
 ---
 
-## Before Judges Arrive (10 minutes before)
+## 🚀 Setup (3 Commands)
+
+```bash
+# 1. Install dependencies
+pip install -r requirements.txt
+
+# 2. (Optional) Configure Groq AI — already set in .env
+#    GROQ_API_KEY=your_key  |  GROQ_MODEL=qwen/qwen3.8-27b
+
+# 3. Start the server
+uvicorn app:app --reload
+```
+
+Open → **[http://localhost:8000](http://localhost:8000)**
+
+---
+
+## 🔐 Demo Logins
+
+| Role | Username | Password | What you can do |
+|:--|:--|:--|:--|
+| **Admin (Store Director)** | `admin` | `admin@2026` | Everything — catalog, POs, resets, audit |
+| **Manager (Procurement)** | `manager` | `manager@2026` | Create & approve POs, view reports |
+| **Storekeeper** | `storekeeper` | `storekeeper@2026` | Stock in / stock out / cycle adjust |
+
+---
+
+## 🎬 5-Minute Demo Script
+
+### Step 1 — Live Dashboard (60 sec)
+1. Log in as **admin**.
+2. Notice the **pulsing green LIVE pill** in the top bar — the simulator is running, dispatching and receiving welding spares in real time.
+3. Watch the **Activity Feed** update automatically (no refresh needed).
+4. The 4 KPI cards animate their counts on load:
+   - **Total SKUs** · **Total Valuation (₹)** · **Low-Stock Items** · **Active Suppliers**
+5. Click any KPI card to jump to filtered inventory (e.g., click "Low Stock" to see only LOW/CRITICAL/OUT items).
+
+---
+
+### Step 2 — Inventory Catalog + Item Drawer (60 sec)
+1. Switch to the **Inventory** tab.
+2. Type `"contact tip"` in the search box — watch real-time filter.
+3. Click any row to open the **right-side drawer**:
+   - Item details, unit cost, selling price, bin location, compatible machines
+   - **30-Day Demand Forecast** chart (AI-calculated)
+   - Last 5 stock movements for that item
+4. Use the **Category pills** (MIG Spares, TIG Spares, Robotics, Wire & Consumables) to segment the catalog.
+5. Use the **Status pills** to isolate items by OK / LOW / CRITICAL / OUT / DEAD.
+
+---
+
+### Step 3 — Stock Out → Dispatch Note PDF (60 sec)
+1. Still on Inventory tab, find a **CRITICAL** or **LOW** item.
+2. Click **Stock Out** (red button in the drawer or the action button on the row).
+3. Enter quantity and reference number — submit.
+4. A **Goods Dispatch Note PDF** link appears instantly in the success toast.
+5. Click it to preview the printable dispatch document (letterhead, item table, stamp area).
+
+---
+
+### Step 4 — AI Copilot (45 sec)
+1. Switch to the **AI Assistant** tab.
+2. Click the suggestion chip: **"What should I reorder this week?"**
+3. The assistant reads live inventory and responds with:
+   - Specific SKUs below reorder level
+   - Suggested quantities
+   - Supplier recommendations
+4. Try: **"Which MIG contact tips are critically low?"** for a domain-specific response.
+
+---
+
+### Step 5 — Create PO → Approve → Receive (60 sec)
+1. Switch to **Purchase Orders** tab.
+2. Click **+ New Purchase Order** (manager/admin only).
+3. Select a supplier from the dropdown (e.g., Binzel India).
+4. Add 2–3 line items using **+ Add Item** — the ₹ total updates live.
+5. Submit → PO is created with ID format `ANI-PO-2026-XXXX`.
+6. Click **Approve** on the new PO row → status changes to **APPROVED**.
+7. Click **Receive** → stock is auto-added for each line item, IN movements are created.
+8. Dispatch Note PDFs appear for each received movement.
+
+---
+
+### Step 6 — Reset Demo Data (15 sec)
+1. Click the **⚡ Reset Demo Data** amber button (admin-only, top bar).
+2. Confirm the prompt — 62 SKUs, 14 suppliers, 251 movements, and 10 POs are reseeded.
+3. All connected browser tabs update instantly via WebSocket.
+
+---
+
+## 📊 What the System Tracks
+
+| Capability | Detail |
+|:--|:--|
+| **62 Active SKUs** | MIG, TIG, Robotics, Wire & Consumables |
+| **14 Authorised Suppliers** | Binzel, Panasonic, Fronius, ESAB, Ador, Lincoln Electric and more |
+| **5 Stock Statuses** | OK · LOW · CRITICAL · OUT · DEAD (auto-calculated) |
+| **Full Audit Trail** | Every action logged with acting user and timestamp |
+| **Auto-Reorder Logic** | Skips items already on open DRAFT/APPROVED POs (no double orders) |
+| **RBAC** | 3-tier role enforcement on every API endpoint |
+| **Real-Time WebSockets** | Dashboard + activity feed update across all connected clients |
+
+---
+
+## 📁 Export Menu (Reports Tab)
+
+| Export | Format | Content |
+|:--|:--|:--|
+| Low-Stock Replenishment Advisory | **PDF** | Items below reorder level, qty needed, preferred supplier |
+| Low-Stock Replenishment Advisory | **Excel** | Same data in spreadsheet form |
+| Low-Stock Replenishment Advisory | **CSV** | Raw data for ERP import |
+| Executive Stock Valuation | **PDF** | Full catalog valuation with letterhead |
+| Comprehensive Ledger | **Excel (.xlsx)** | 4-sheet workbook: Catalog, Movements, POs, Suppliers |
+| All Purchase Orders Batch | **PDF** | Consolidated printable PO document |
+
+---
+
+## 🔗 Key API Endpoints (for developers)
 
 ```
-1. docker-compose up --build          # or: uvicorn app:app --reload --port 8000
-2. Open http://localhost:8000         # confirm dashboard loads, no errors
-3. GET  http://localhost:8000/api/health  # confirm {"status":"ok"}
-4. Click "Reset Demo" button → confirm toast "Reset complete"
-5. Open AI Copilot → type "What are the top risks?"
-   → confirm response appears within 3 seconds
-6. Click Priority Queue → confirm $47,200 ShadowTech card is at the top
+GET  /api/dashboard          — Live KPIs and chart feeds
+GET  /api/inventory          — Paginated, searchable catalog
+POST /api/stock/out          — Issue stock (creates dispatch note)
+POST /api/procurement        — Create PO with multi-item lines
+POST /api/procurement/{id}/approve  — Approve PO
+POST /api/procurement/{id}/receive  — Receive goods + auto stock-in
+GET  /api/forecast/{item_id} — 30-day demand forecast
+GET  /api/export/low-stock/pdf      — Low-stock advisory PDF
+POST /api/ai/chat            — Groq-powered AI copilot
+WS   /ws                     — WebSocket for live updates
 ```
 
 ---
 
-## 6-Step Demo Script (4 minutes)
-
-### Step 1 — The Problem (30 seconds)
-- Point to **Financial Exposure** and **Integrity Variance** stat cards
-- Say:
-  > *"34% of spend is invisible. That's $2.8M in untracked procurement per $100M budget.
-  > This is money leaving the organisation through unapproved channels right now."*
-
-### Step 2 — A Live Detection (45 seconds)
-- Click **Priority Queue** tab
-- Click the **$47,200 ShadowTech Solutions** card (highest risk score, should be ~0.92)
-- Point to the XAI breakdown — read the top 3 risk factors aloud
-- Say:
-  > *"Flagged in under one second. Corporate card. 11:31pm Saturday.
-  > Unapproved vendor. No PO. Risk score 0.92 out of 1.0."*
-
-### Step 3 — AI Copilot (45 seconds)
-- Open the **AI Copilot** tab
-- Type: `Which vendors need urgent attention?`
-- While it loads, say: *"Two LLMs in parallel — Groq at 200ms, Cohere for executive summaries."*
-- When response appears: point to FastParts / QuickSupply / RapidTools
-- Say:
-  > *"The model picked up the split-PO pattern before a human would have noticed."*
-
-### Step 4 — Vendor Collusion (30 seconds)
-- Click **Vendors** tab → scroll to **Vendor Rings** section
-- Point to: **FastParts Ltd / QuickSupply Co / RapidTools Inc**
-- Say:
-  > *"Three vendors. Same employee. Same department. All transactions under the $5,000
-  > approval threshold. Classic split-PO fraud — caught automatically."*
-
-### Step 5 — Prevention (30 seconds)
-- Click **Inventory** tab
-- Point to an item with a green **Auto-PO Draft** badge
-- Say:
-  > *"Stock hit the reorder point. A PO draft was raised automatically.
-  > The purchase goes through proper channels. No shadow purchasing needed."*
-
-### Step 6 — The Trend (30 seconds)
-- Click **Analytics** → **Trend Chart**
-- Point to the **Finance department** line going steeply downward
-- Say:
-  > *"Finance was at 45% shadow rate in January. By March: 8%.
-  > The system is working. That's the ROI story."*
-
----
-
-## Hard Judge Questions — Scripted Answers
-
-**"Does the model actually learn?"**
-> *"Yes. Every 10 human corrections trigger a full Isolation Forest retrain —
-> new contamination parameter, new decision boundary.
-> The Detection Quality card tracks live accuracy from real reviewer feedback.
-> You can watch it change during the demo."*
-
-**"What makes this different from SAP Ariba?"**
-> *"SAP flags at month-end batch review. We flag in under one second.
-> SAP has no ML risk ranking — you get a flat list, not a priority queue.
-> Our Preventive Intelligence layer stops the purchase before it happens.
-> SAP has none of that. This is the operational layer that sits on top of any ERP."*
-
-**"How accurate is it?"**
-> *"Isolation Forest starts at ~85% baseline — zero labeled training data required.
-> With human feedback it self-improves. The Detection Quality card shows live accuracy.
-> On our exhibition dataset with 4 scenario seeds: consistently above 88%."*
-
-**"Can it scale?"**
-> *"PostgreSQL-ready — one environment variable swap.
-> Containerised with Docker — one command deploy.
-> WebSocket architecture handles concurrent analyst sessions.
-> ML and LLM calls are stateless — horizontally scalable behind any load balancer."*
-
-**"What's the SAP connector?"**
-> *"Right now: CSV/Excel import — works with any ERP export.
-> Next milestone: SAP BAPI live connector to replace the batch import with
-> real-time event streaming. The ingestion layer is already abstracted for that."*
-
-**"What would you build next?"**
-> *"Three things: SAP BAPI live connector, React Native mobile approval app,
-> and predictive analytics — forecast shadow risk before it happens
-> using seasonal spend patterns and vendor history."*
-
----
-
-## Key Numbers to Cite (Memorise These)
-
-| Stat | Value | Source |
-|------|-------|--------|
-| Enterprise shadow spend | 30–40% of total procurement | Gartner |
-| Average annual leakage | $2.8M per $100M budget | Gartner |
-| Manual detection time | 87 days average | KPMG |
-| ShadowSync detection | < 1 second | Live demo |
-| Groq response time | ~200ms | Live demo |
-| ML features | 10 (IsolationForest-v3) | ai_module.py |
-| Training data required | 0 (unsupervised) | Design |
-| Detection Quality baseline | 85.0% | Stats card |
-
----
-
-## If Things Go Wrong
-
-| Problem | Fix |
-|---------|-----|
-| WiFi dies | All ML/detection features work offline. Show XAI breakdown instead of copilot. Say: *"Core ML engine is fully local — no cloud dependency for detection."* |
-| AI Copilot slow/stalled | The cache pre-warmed 6 answers at startup. Refresh copilot tab. Fall back to showing the vendor ring detection instead. |
-| Dashboard blank | Check http://localhost:8000/api/health — if down, `docker-compose restart` |
-| No shadows showing | Click "Reset Demo" → then GET /api/ml/retrain to re-score all transactions |
-| Second judge sees resolved data | Click **🔄 Reset Demo** in the header → confirm → everything resets |
-
----
-
-## Endpoint Quick Reference
-
-| Endpoint | What it does |
-|----------|-------------|
-| `GET  /api/stats` | Financial exposure, shadow rate, detection quality |
-| `GET  /api/shadows` | All shadow purchases with risk scores |
-| `GET  /api/ml/status` | Model version, feature weights, fitted status |
-| `POST /api/ml/retrain` | Manual retrain trigger |
-| `POST /api/demo/reset` | Reset to clean exhibition state |
-| `POST /api/feedback/{id}` | Submit human feedback (triggers auto-retrain at 10) |
-| `GET  /api/analytics/dept-risk` | Department risk heatmap data |
-| `GET  /api/supplier-network` | Vendor collusion network graph |
-| `GET  /api/trends?period=week` | Trend chart time series data |
-| `POST /api/import/csv` | Batch CSV/Excel ingestion |
-| `GET  /api/health` | System health check |
+*© 2026 Anishka Industries · Proprietary Commercial Software*

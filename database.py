@@ -1,29 +1,30 @@
 """
-Database models and initialization for Shadow Supply Chain system v3.0.
-Uses SQLAlchemy ORM with SQLite.
-Includes: RiskSnapshot, RiskMetric, ActionRecommendation, BehaviorMetric, and UserFeedback.
+Database models and initialization for Anishka Inventory Management System.
+Extended for Anishka Industries (Khandsa Road, Sector-10, Gurugram).
+Specialized in MIG welding, TIG welding, and robotics welding spares.
 """
-from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, Date, DateTime, ForeignKey, Text, event
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship
-import datetime, os, csv, random
+import os
+import datetime
 import uuid as _uuid
+from sqlalchemy import (
+    create_engine, Column, Integer, String, Float, Boolean, Text,
+    ForeignKey, event
+)
+from sqlalchemy.orm import sessionmaker, relationship, declarative_base
 
 Base = declarative_base()
 
-# ─── B5: Dynamic Database URL (SQLite for dev, PostgreSQL for production) ───
+# ─── Database Configuration ──────────────────────────────────────────
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
-    f"sqlite:///{os.path.join(os.path.dirname(__file__), 'shadow_supply.db')}"  # fallback for local dev
+    f"sqlite:///{os.path.join(os.path.dirname(__file__), 'anishka_inventory.db')}"
 )
 
-# Handle PostgreSQL URL format from cloud providers (Render, Railway, Heroku)
+# Cloud postgres provider normalization
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 if "sqlite" in DATABASE_URL:
-    # SQLite-specific path extraction
-    DB_PATH = DATABASE_URL.replace("sqlite:///", "")
     connect_args = {"check_same_thread": False, "timeout": 30}
     engine = create_engine(
         DATABASE_URL,
@@ -32,13 +33,17 @@ if "sqlite" in DATABASE_URL:
         max_overflow=20
     )
 else:
-    # PostgreSQL — no check_same_thread, use connection pooling
     connect_args = {}
-    engine = create_engine(DATABASE_URL, connect_args=connect_args)
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args=connect_args,
+        pool_size=10,
+        max_overflow=20,
+        pool_pre_ping=True
+    )
 
 @event.listens_for(engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
-    # Only apply SQLite PRAGMAs for SQLite connections
     if "sqlite" in DATABASE_URL:
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
@@ -49,613 +54,764 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
+# ─── Extended Models ─────────────────────────────────────────────────
+
 class Vendor(Base):
-    __tablename__ = "vendors"
-    id = Column(String, primary_key=True)
-    name = Column(String, unique=True, nullable=False)
-    category = Column(String)
-    risk_level = Column(String, default="Medium")  # Low, Medium, High
-    approved = Column(Boolean, default=False)
-    avg_order = Column(Float, default=0)
-    trust_score = Column(Float, default=50.0)  # 0-100 trust score
-    # F5: Supplier network graph fields
-    tier = Column(Integer, default=1)                   # 1=direct, 2=sub-supplier, 3=raw material
-    alternative_vendors = Column(String, default="")    # comma-separated backup vendor names
-    # F11: ESG compliance fields
-    esg_score = Column(Float, default=50.0)             # 0-100 sustainability score
-    carbon_rating = Column(String, default="C")         # A/B/C/D/F
-    sustainability_certified = Column(Boolean, default=False)
+    """
+    Suppliers table: Authorized welding OEMs and industrial distributors.
+    Mapped to __tablename__ = 'suppliers'.
+    """
+    __tablename__ = "suppliers"
+
+    id = Column(String, primary_key=True)               # e.g. "V001", "V002"
+    name = Column(String, unique=True, nullable=False)   # Supplier Company Name
+    contact_person = Column(String, nullable=True)      # Contact Person Name
+    phone = Column(String, nullable=True)               # Phone Number
+    city = Column(String, nullable=True)                # City / Cluster (Delhi-NCR, Pune, Ahmedabad, Chennai)
+    lead_time_days = Column(Integer, default=3)         # Average Lead Time in days
+    rating = Column(Float, default=4.5)                 # Rating out of 5.0
+
+    # Compatibility & Auxiliary Fields
+    category = Column(String, nullable=True, default="Welding Equipment & Spares")
+    approved = Column(Boolean, default=True)
+    contact_email = Column(String, nullable=True, default="sales@supplier.com")
+    email = Column(String(120), nullable=True)          # Official procurement order email
+    gstin = Column(String(20), nullable=True)           # Supplier GSTIN (15 chars)
+    state = Column(String(50), default="Haryana")       # State / Place of Supply
+    avg_order = Column(Float, default=0.0)
     portal_token = Column(String, unique=True, default=lambda: str(_uuid.uuid4()))
+
+    # Relationships
+    items = relationship("Inventory", back_populates="supplier")
+    purchase_orders = relationship("Procurement", back_populates="supplier")
+
+    @property
+    def trust_score(self) -> float:
+        return round((self.rating / 5.0) * 100, 1) if self.rating else 90.0
+
+    @property
+    def risk_level(self) -> str:
+        if (self.rating or 4.0) >= 4.4:
+            return "Low"
+        elif (self.rating or 4.0) >= 3.5:
+            return "Medium"
+        return "High"
+
+    @property
+    def contact_phone(self) -> str:
+        return self.phone or "+91 124 400 0000"
 
 
 class Inventory(Base):
-    __tablename__ = "inventory"
-    id = Column(String, primary_key=True)
+    """
+    Items table: Welding spares catalog for MIG, TIG, Robotics & Wire.
+    Mapped to __tablename__ = 'items'.
+    """
+    __tablename__ = "items"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    sku = Column(String, unique=True, nullable=False, index=True)
     name = Column(String, nullable=False)
-    sku = Column(String, unique=True)
+    category = Column(String, nullable=False)           # MIG Welding / TIG Welding / Robotics Spares / Welding Wire / Safety & Accessories
+    unit = Column(String, default="pcs")                # pcs / kg / mtr / set
+    compatible_with = Column(Text, nullable=True)       # Equipment / Torch compatibility string
+    location = Column(String, default="R1-B1")          # Rack / Bin e.g. "R2-B4"
     quantity = Column(Integer, default=0)
-    unit_price = Column(Float, default=0)
-    category = Column(String)
-    reorder_level = Column(Integer, default=0)
-    location = Column(String)
-    last_updated = Column(String, nullable=True)  # ISO datetime string for tracking
+    reorder_level = Column(Integer, default=10)
+    reorder_qty = Column(Integer, default=50)
+    unit_cost = Column(Float, default=0.0)              # Cost Price (₹)
+    selling_price = Column(Float, default=0.0)          # Selling Price (₹)
+    supplier_id = Column(String, ForeignKey("suppliers.id"), nullable=True)
+    reserved_qty = Column(Integer, default=0, nullable=False) # Stock reserved for confirmed sales orders
+    hsn_code = Column(String, default="8466", nullable=False) # HSN classification (placeholder)
+    gst_rate = Column(Float, default=18.0, nullable=False)    # GST % rate
+    last_updated = Column(String, nullable=True)        # ISO datetime
+    is_active = Column(Boolean, default=True)
+    import_batch_id = Column(String, nullable=True)
+
+    # Relationships
+    supplier = relationship("Vendor", back_populates="items")
+    stock_movements = relationship("StockMovement", back_populates="item", cascade="all, delete-orphan")
+    po_items = relationship("POItem", back_populates="item")
+    sales_order_items = relationship("SalesOrderItem", back_populates="item")
+
+    @property
+    def available_quantity(self) -> int:
+        return max(0, (self.quantity or 0) - (self.reserved_qty or 0))
+
+    # Compatibility alias for unit_price
+    @property
+    def unit_price(self) -> float:
+        return self.selling_price if self.selling_price else self.unit_cost
+
+    @unit_price.setter
+    def unit_price(self, val: float):
+        self.selling_price = val
+
+
+class StockMovement(Base):
+    """
+    Stock movements ledger: Inwards, Dispatches, and Adjustments.
+    Mapped to __tablename__ = 'stock_movements'.
+    """
+    __tablename__ = "stock_movements"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    item_id = Column(Integer, ForeignKey("items.id"), nullable=False, index=True)
+    type = Column(String, nullable=False)               # IN / OUT / ADJUST
+    quantity = Column(Integer, nullable=False)
+    reference = Column(String, nullable=True)           # PO no / invoice no / reason
+    party = Column(String, nullable=True)               # Supplier or Customer / Assembly line name
+    performed_by = Column(String, default="storekeeper")# User who performed action
+    timestamp = Column(String, nullable=False)          # ISO datetime or formatted date
+    balance_after = Column(Integer, default=0)          # Stock balance after this movement
+    client_id = Column(String, nullable=True, unique=True, index=True) # Offline queue idempotency UUID
+
+    # Relationships
+    item = relationship("Inventory", back_populates="stock_movements")
+
+    # Compatibility properties for legacy code & frontend
+    @property
+    def movement_id(self) -> str:
+        return f"MOV-{self.id:05d}"
+
+    @property
+    def sku(self) -> str:
+        return self.item.sku if self.item else ""
+
+    @property
+    def item_name(self) -> str:
+        return self.item.name if self.item else ""
+
+    @property
+    def movement_type(self) -> str:
+        return "INWARD" if self.type == "IN" else ("OUTWARD" if self.type == "OUT" else self.type)
+
+    @property
+    def destination_or_source(self) -> str:
+        return self.party or "Central Store"
+
+    @property
+    def operator(self) -> str:
+        return self.performed_by or "storekeeper"
+
+    @property
+    def user(self) -> str:
+        return self.performed_by or "storekeeper"
+
+    @user.setter
+    def user(self, val: str):
+        self.performed_by = val
+
+    @property
+    def source(self) -> str:
+        return self.reference or ""
+
+    @source.setter
+    def source(self, val: str):
+        self.reference = val
+
+    @property
+    def notes(self) -> str:
+        return self.reference or ""
+
+    @notes.setter
+    def notes(self, val: str):
+        self.reference = val
 
 
 class Procurement(Base):
-    __tablename__ = "procurement"
-    id = Column(String, primary_key=True)
-    vendor_id = Column(String, ForeignKey("vendors.id"), nullable=True)
-    vendor_name = Column(String)
-    item = Column(String)
-    amount = Column(Float)
-    quantity = Column(Integer, default=1)
-    date = Column(String)
-    status = Column(String, default="Pending")  # Pending, Approved, Delivered, Resolved
-    department = Column(String)
-    source = Column(String, default="Manual")  # Manual | Shadow-Resolved
+    """
+    Purchase Orders table.
+    Mapped to __tablename__ = 'purchase_orders'.
+    """
+    __tablename__ = "purchase_orders"
 
-
-class Transaction(Base):
-    __tablename__ = "transactions"
-    id = Column(String, primary_key=True)
-    date = Column(String)
-    vendor = Column(String, index=True)        # indexed: PO matching scans by vendor
-    amount = Column(Float)
-    description = Column(String)
-    payment_type = Column(String)  # Invoice, Corporate Card, Expense Claim
-    card_holder = Column(String)
-    department = Column(String, index=True)    # indexed: department-level risk queries
-    is_shadow = Column(Boolean, default=False, index=True)  # indexed: shadow filter is hot path
-    matched_po_id = Column(String, nullable=True)
-    ai_risk_score = Column(Float, default=0.0)
-    ai_category = Column(String, nullable=True)
-    # B7: Multi-currency support
-    currency = Column(String, default="USD")           # Original transaction currency
-    amount_usd = Column(Float, nullable=True)          # Normalized to USD for ML scoring
-    exchange_rate = Column(Float, default=1.0)         # Rate applied at time of transaction
-
-    # Relationship to shadow purchase
-    shadow_purchase = relationship("ShadowPurchase", back_populates="transaction", uselist=False)
-
-
-class ShadowPurchase(Base):
-    __tablename__ = "shadow_purchases"
-
-    # Core fields
     id = Column(Integer, primary_key=True, autoincrement=True)
-    transaction_id = Column(String, ForeignKey("transactions.id"), nullable=True, index=True)
-    detected_at = Column(String)
-    reason = Column(String)
-    risk_score = Column(Float, default=0.0)
-    confidence_score = Column(Float, default=1.0)      # System confidence in prediction
-    data_quality_flag = Column(String, default="Good") # Good, Vague, Missing Data
-    status = Column(String, default="Pending", index=True)         # Pending, Resolved, Ignored
-    resolved_po_id = Column(String, nullable=True)
-    item_category = Column(String, nullable=True)
+    po_number = Column(String, unique=True, nullable=False, index=True) # e.g. "PO-2026-001"
+    supplier_id = Column(String, ForeignKey("suppliers.id"), nullable=False)
+    status = Column(String, default="DRAFT")            # DRAFT / APPROVED / RECEIVED / CANCELLED
+    created_at = Column(String, nullable=False)         # ISO datetime
+    expected_date = Column(String, nullable=True)       # Expected delivery date
+    total_value = Column(Float, default=0.0)            # Total amount in ₹
+    auto_generated = Column(Boolean, default=False)     # True if system auto-drafted
+    auto_approved = Column(Boolean, default=False)      # True if approved by automation rule
 
-    # Priority Queue Engine fields - NEW
-    priority_score = Column(Float, default=0.0)        # Calculated priority score
-    estimated_loss = Column(Float, default=0.0)       # Financial impact estimate
-    frequency = Column(Integer, default=1)            # Pattern frequency count
-
-    # Detection Layer & Bypass Link
-    confirmed_shadow = Column(Boolean, default=False)
-    false_positive = Column(Boolean, default=False)
-    needs_review = Column(Boolean, default=True, index=True)   # indexed: recalibration job filter
-    bypassed_preventive = Column(Boolean, default=False)
-    
-    # Phase 3 - LP-01 Feedback fields
-    reviewer_verdict = Column(String, nullable=True) # 'confirmed_shadow', 'false_positive', 'needs_review'
-    reviewed_at = Column(String, nullable=True)
-    reviewer_id = Column(String, nullable=True)
-
-    # LP-01 idempotency guard: set True once recalibration_job has applied this verdict to vendor trust.
-    # Persisted in DB so server restarts never cause double-application of feedback adjustments.
-    recalibration_applied = Column(Boolean, default=False, nullable=False)
+    # Auxiliary / compatibility fields
+    department = Column(String, default="Central Store")
+    delivery_challan_no = Column(String, nullable=True)
+    delivery_doc_path = Column(String, nullable=True)
 
     # Relationships
-    transaction = relationship("Transaction", back_populates="shadow_purchase")
-    action_recommendations = relationship("ActionRecommendation", back_populates="shadow_purchase")
-    behavior_metrics = relationship("BehaviorMetric", back_populates="shadow_purchase")
-    user_feedback = relationship("UserFeedback", back_populates="shadow_purchase")
-    audit_log = relationship("AuditLog", back_populates="shadow_purchase")
+    supplier = relationship("Vendor", back_populates="purchase_orders")
+    items = relationship("POItem", back_populates="purchase_order", cascade="all, delete-orphan")
+
+    # Compatibility properties
+    @property
+    def vendor_id(self) -> str:
+        return self.supplier_id
+
+    @property
+    def vendor_name(self) -> str:
+        return self.supplier.name if self.supplier else "Supplier"
+
+    @property
+    def date(self) -> str:
+        return self.created_at[:10] if self.created_at else ""
+
+    @property
+    def amount(self) -> float:
+        return self.total_value
+
+    @property
+    def quantity(self) -> int:
+        return sum(it.qty for it in self.items) if self.items else 1
+
+    @property
+    def item(self) -> str:
+        if self.items:
+            names = [it.item.name for it in self.items if it.item]
+            if names:
+                return ", ".join(names[:2]) + ("..." if len(names) > 2 else "")
+        return "Welding Equipment Spares"
+
+    @property
+    def source(self) -> str:
+        return "Auto-Reorder" if self.auto_generated else "Manual"
 
 
-class RiskSnapshot(Base):
-    """Aggregate real-time risk snapshots — stored after each detection cycle."""
-    __tablename__ = "risk_snapshots"
+class POItem(Base):
+    """
+    Purchase Order Line Items.
+    Mapped to __tablename__ = 'po_items'.
+    """
+    __tablename__ = "po_items"
+
     id = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp = Column(String, nullable=False)
-    total_exposure = Column(Float, default=0.0)
-    shadow_rate = Column(Float, default=0.0)
-    avg_risk_score = Column(Float, default=0.0)
-    high_risk_count = Column(Integer, default=0)
-    risk_level = Column(String, default="Low")
-    pending_actions = Column(Integer, default=0)
+    po_id = Column(Integer, ForeignKey("purchase_orders.id"), nullable=False, index=True)
+    item_id = Column(Integer, ForeignKey("items.id"), nullable=False, index=True)
+    qty = Column(Integer, default=1, nullable=False)
+    received_qty = Column(Integer, default=0, nullable=False)
+    unit_cost = Column(Float, default=0.0, nullable=False)
+    reason = Column(Text, nullable=True)
+
+    # Relationships
+    purchase_order = relationship("Procurement", back_populates="items")
+    item = relationship("Inventory", back_populates="po_items")
 
 
-class RiskMetric(Base):
-    """Individual financial impact analysis for a specific shadow purchase."""
-    __tablename__ = "risk_metrics"
+
+
+class Customer(Base):
+    """
+    Industrial welding customers: OEMs, Tier-1 ancillaries, and fabrication bays.
+    Mapped to __tablename__ = 'customers'.
+    """
+    __tablename__ = "customers"
+
     id = Column(Integer, primary_key=True, autoincrement=True)
-    transaction_id = Column(String, ForeignKey("transactions.id"))
-    risk_score = Column(Float, default=0.0)
-    estimated_loss = Column(Float, default=0.0)
-    category = Column(String, default="Low")           # Low, Medium, High
+    name = Column(String, nullable=False)
+    gstin = Column(String, nullable=True)
+    state = Column(String, nullable=False, default="Haryana")
+    city = Column(String, nullable=False)
+    contact_person = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    price_tier = Column(String, default="Standard")  # Standard | Wholesale | OEM Tier-1
+    credit_limit = Column(Float, default=100000.0)
+    credit_days = Column(Integer, default=30)
+    is_active = Column(Boolean, default=True)
+    whatsapp_opt_out = Column(Boolean, default=False)
+
+    # Relationships
+    sales_orders = relationship("SalesOrder", back_populates="customer", cascade="all, delete-orphan")
+    invoices = relationship("Invoice", back_populates="customer", cascade="all, delete-orphan")
 
 
-class ActionRecommendation(Base):
-    """Decisions and next steps for shadow purchases."""
-    __tablename__ = "recommendations"
+class SalesOrder(Base):
+    """
+    Sales Orders & Quotations raised for industrial customers.
+    Mapped to __tablename__ = 'sales_orders'.
+    """
+    __tablename__ = "sales_orders"
+
     id = Column(Integer, primary_key=True, autoincrement=True)
-    shadow_id = Column(Integer, ForeignKey("shadow_purchases.id"), nullable=True)
-    transaction_id = Column(String, ForeignKey("transactions.id"))
-    recommendation_text = Column(String, nullable=False)
-    priority = Column(String, default="Medium")        # Low, Medium, High, Critical
-    action_taken = Column(String, nullable=True)       # What action was taken
-    created_at = Column(String, nullable=True)         # ISO timestamp when created
-
-    # Relationship
-    shadow_purchase = relationship("ShadowPurchase", back_populates="action_recommendations")
-
-
-class BehaviorMetric(Base):
-    """Pattern tracking for accountability and operational analysis."""
-    __tablename__ = "behavior_metrics"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    shadow_id = Column(Integer, ForeignKey("shadow_purchases.id"), nullable=True)
-    employee_id = Column(String)                       # Card holder name in this context
-    department = Column(String)
-    shadow_count = Column(Integer, default=0)
-    risk_level = Column(String, default="Low")
-
-    # Relationship
-    shadow_purchase = relationship("ShadowPurchase", back_populates="behavior_metrics")
-
-
-class UserFeedback(Base):
-    """Human-in-the-loop corrections on AI predictions."""
-    __tablename__ = "user_feedback"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    shadow_id = Column(Integer, ForeignKey("shadow_purchases.id"), nullable=True)
-    transaction_id = Column(String, nullable=True)
-    feedback_type = Column(String, nullable=False)     # correct, incorrect, recategorize
-    original_category = Column(String, nullable=True)
-    corrected_category = Column(String, nullable=True)
-    original_risk = Column(Float, nullable=True)
-    corrected_risk = Column(Float, nullable=True)
+    order_no = Column(String, unique=True, nullable=False, index=True) # e.g. "ANI-SO-2026-0001" or "ANI-QT-2026-0001"
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False, index=True)
+    status = Column(String, default="QUOTE", nullable=False) # QUOTE | CONFIRMED | PARTIALLY_DISPATCHED | DISPATCHED | INVOICED | CANCELLED
+    created_by = Column(String, nullable=False, default="manager")
+    created_at = Column(String, nullable=False) # ISO datetime
+    valid_until = Column(String, nullable=True) # Quotation validity date
     notes = Column(Text, nullable=True)
-    submitted_at = Column(String, nullable=False)
-    applied = Column(Boolean, default=False)           # Whether feedback was applied to model
+    override_reason = Column(Text, nullable=True) # Reason provided if confirmed above credit limit
+    total_taxable = Column(Float, default=0.0)
+    total_tax = Column(Float, default=0.0)
+    grand_total = Column(Float, default=0.0)
 
-    # Relationship
-    shadow_purchase = relationship("ShadowPurchase", back_populates="user_feedback")
+    # Relationships
+    customer = relationship("Customer", back_populates="sales_orders")
+    items = relationship("SalesOrderItem", back_populates="order", cascade="all, delete-orphan")
+    invoices = relationship("Invoice", back_populates="order")
+
+
+class SalesOrderItem(Base):
+    """
+    Line items within a sales order or quotation.
+    Mapped to __tablename__ = 'sales_order_items'.
+    """
+    __tablename__ = "sales_order_items"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    order_id = Column(Integer, ForeignKey("sales_orders.id"), nullable=False, index=True)
+    item_id = Column(Integer, ForeignKey("items.id"), nullable=False, index=True)
+    qty = Column(Integer, default=1, nullable=False)
+    unit_price = Column(Float, default=0.0, nullable=False) # Selling price in ₹
+    discount_pct = Column(Float, default=0.0)
+    gst_rate = Column(Float, default=18.0)
+    dispatched_qty = Column(Integer, default=0)
+
+    # Relationships
+    order = relationship("SalesOrder", back_populates="items")
+    item = relationship("Inventory", back_populates="sales_order_items")
+
+
+class Invoice(Base):
+    """
+    Tax Invoices generated per Indian GST specifications.
+    Mapped to __tablename__ = 'invoices'.
+    """
+    __tablename__ = "invoices"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    invoice_no = Column(String, unique=True, nullable=False, index=True) # e.g. ANI/2026-27/0001
+    order_id = Column(Integer, ForeignKey("sales_orders.id"), nullable=True, index=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False, index=True)
+    date = Column(String, nullable=False) # YYYY-MM-DD
+    place_of_supply = Column(String, nullable=False) # State name or code
+    taxable_value = Column(Float, default=0.0)
+    cgst = Column(Float, default=0.0)
+    sgst = Column(Float, default=0.0)
+    igst = Column(Float, default=0.0)
+    total = Column(Float, default=0.0)
+    status = Column(String, default="UNPAID", nullable=False) # UNPAID | PARTIALLY_PAID | PAID | CANCELLED
+
+    # Relationships
+    order = relationship("SalesOrder", back_populates="invoices")
+    customer = relationship("Customer", back_populates="invoices")
+    payments = relationship("Payment", back_populates="invoice", cascade="all, delete-orphan")
+
+
+class Payment(Base):
+    """
+    Customer payments received against Tax Invoices.
+    Mapped to __tablename__ = 'payments'.
+    """
+    __tablename__ = "payments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=False, index=True)
+    amount = Column(Float, default=0.0, nullable=False)
+    mode = Column(String, default="NEFT/RTGS") # NEFT/RTGS | Cheque | UPI | Cash
+    reference = Column(String, nullable=True) # Bank UTR / Cheque Number
+    date = Column(String, nullable=False) # YYYY-MM-DD
+    recorded_by = Column(String, default="manager")
+
+    # Relationships
+    invoice = relationship("Invoice", back_populates="payments")
+
+class AppSetting(Base):
+    """Configuration settings for system automation and business logic."""
+    __tablename__ = "app_settings"
+
+    key = Column(String, primary_key=True)
+    value = Column(String, nullable=False)
+    updated_by = Column(String, nullable=True)
+    updated_at = Column(String, nullable=True)
+
+
+class AutomationRun(Base):
+    """Log of automated replenishment scan cycles."""
+    __tablename__ = "automation_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    started_at = Column(String, nullable=False)
+    trigger = Column(String, default="scheduled")       # scheduled | manual | event
+    scanned = Column(Integer, default=0)
+    drafted = Column(Integer, default=0)
+    auto_approved = Column(Integer, default=0)
+    overdue = Column(Integer, default=0)
+    summary = Column(Text, nullable=True)
+
+
+class Outbox(Base):
+    """Supplier and system communication email/WhatsApp outbox."""
+    __tablename__ = "outbox"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    created_at = Column(String, nullable=False)
+    to_email = Column(String, nullable=True, default="")
+    subject = Column(String, nullable=False)
+    body = Column(Text, nullable=False)
+    attachment_name = Column(String, nullable=True)
+    status = Column(String, default="SIMULATED", nullable=False)       # QUEUED | SENT | FAILED | SIMULATED
+    related_po = Column(String, nullable=True)
+    channel = Column(String, default="EMAIL", nullable=False)          # EMAIL | WHATSAPP
+    sender = Column(String, default="system", nullable=False)          # User or role who dispatched
+    recipient_phone = Column(String, nullable=True)                    # Normalized phone for WhatsApp
+    template_lang = Column(String, nullable=True, default="en")        # en | hi
+    ref_type = Column(String, nullable=True)                           # OPPORTUNITY | PO | SALES_ORDER
+    ref_id = Column(String, nullable=True)                             # ID or reference code
+
+
+# CommunicationLog alias for unified communications tracking
+CommunicationLog = Outbox
 
 
 class AuditLog(Base):
-    """Compliance and accountability tracking for all human and system actions."""
+    """Immutable audit trail for all system and human operations."""
     __tablename__ = "audit_logs"
+
     id = Column(Integer, primary_key=True, autoincrement=True)
-    shadow_id = Column(Integer, ForeignKey("shadow_purchases.id"), nullable=True)
-    timestamp = Column(String, nullable=False)         # ISO format
-    action = Column(String, nullable=False)            # RECTIFY, DISMISS, FEEDBACK, MODE_CHANGE
-
-    user = Column(String, default="System Administrator")
-    target_id = Column(String, nullable=True)          # Shadow ID, PO ID, or Transaction ID
-    details = Column(Text, nullable=True)              # JSON or human-readable description
-
-    # Relationship
-    shadow_purchase = relationship("ShadowPurchase", back_populates="audit_log")
+    timestamp = Column(String, nullable=False)          # ISO format
+    action = Column(String, nullable=False)             # STOCK_IN, STOCK_OUT, ADJUST, PO_CREATE, LOGIN
+    user = Column(String, default="system")
+    target_id = Column(String, nullable=True)           # SKU, PO No, etc.
+    details = Column(Text, nullable=True)
 
 
-# ─── B4: Role-Based Access Control ───────────────────────────────
+class AIChatLog(Base):
+    """Immutable log of AI Copilot chat sessions, token consumption, and tool calls."""
+    __tablename__ = "ai_chat_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    created_at = Column(String, nullable=False)
+    user = Column(String, default="anonymous")
+    role = Column(String, default="storekeeper")
+    model = Column(String, nullable=False)
+    prompt_tokens = Column(Integer, default=0)
+    completion_tokens = Column(Integer, default=0)
+    total_tokens = Column(Integer, default=0)
+    tool_calls = Column(Text, nullable=True)
+    latency_ms = Column(Integer, default=0)
+
+
+class DocExtraction(Base):
+    """
+    Scanned Delivery Document Extractions & Accuracy Tracking.
+    Mapped to __tablename__ = 'doc_extractions'.
+    """
+    __tablename__ = "doc_extractions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    created_at = Column(String, nullable=False) # ISO datetime
+    uploaded_by = Column(String, nullable=False)
+    file_path = Column(String, nullable=False)
+    content_hash = Column(String, nullable=False, index=True)
+    document_number = Column(String, nullable=True, index=True)
+    document_date = Column(String, nullable=True)
+    supplier_name = Column(String, nullable=True)
+    po_reference = Column(String, nullable=True)
+    matched_po_id = Column(Integer, ForeignKey("purchase_orders.id"), nullable=True)
+    raw_extraction = Column(Text, nullable=True) # JSON string of vision model output
+    matched_lines = Column(Text, nullable=True)  # JSON string of lines with matching & confidence
+    status = Column(String, default="PENDING_REVIEW") # PENDING_REVIEW / CONFIRMED / REJECTED
+    fields_corrected = Column(Integer, default=0) # count of corrections user made during review
+    confirmed_by = Column(String, nullable=True)
+    confirmed_at = Column(String, nullable=True)
+
+    po = relationship("Procurement")
+
+
+class CycleCount(Base):
+    """
+    Physical Inventory Cycle Count Sheets.
+    Tracks periodic inventory audits by category or bin location.
+    """
+    __tablename__ = "cycle_counts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    count_no = Column(String, unique=True, nullable=False, index=True) # e.g. "CC-2026-0001"
+    type = Column(String, default="CATEGORY") # CATEGORY | BIN | ALL
+    target_name = Column(String, nullable=True) # e.g. "MIG Welding" or "R1-B01"
+    status = Column(String, default="DRAFT") # DRAFT | IN_PROGRESS | PENDING_APPROVAL | APPROVED | REJECTED
+    created_by = Column(String, default="storekeeper")
+    created_at = Column(String, nullable=False) # ISO datetime
+    approved_by = Column(String, nullable=True)
+    approved_at = Column(String, nullable=True)
+    approval_notes = Column(Text, nullable=True)
+    total_items = Column(Integer, default=0)
+    variance_items = Column(Integer, default=0)
+    total_variance_value = Column(Float, default=0.0)
+    posted_at = Column(String, nullable=True)
+
+    # Relationships
+    items = relationship("CycleCountItem", back_populates="cycle_count", cascade="all, delete-orphan")
+
+
+class CycleCountItem(Base):
+    """
+    Individual item audit line within a cycle count sheet.
+    """
+    __tablename__ = "cycle_count_items"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    cycle_count_id = Column(Integer, ForeignKey("cycle_counts.id"), nullable=False, index=True)
+    item_id = Column(Integer, ForeignKey("items.id"), nullable=False, index=True)
+    system_qty = Column(Integer, default=0, nullable=False)
+    counted_qty = Column(Integer, nullable=True) # None until physical count entered
+    variance_qty = Column(Integer, default=0, nullable=False) # counted_qty - system_qty
+    unit_cost = Column(Float, default=0.0, nullable=False)
+    variance_value = Column(Float, default=0.0, nullable=False) # variance_qty * unit_cost
+    discrepancy_reason = Column(Text, nullable=True)
+    scanned_at = Column(String, nullable=True)
+
+    # Relationships
+    cycle_count = relationship("CycleCount", back_populates="items")
+    item = relationship("Inventory")
+
+
 class UserRole(Base):
-    """Maps usernames to roles for RBAC enforcement."""
+    """RBAC User accounts with passwords and permissions."""
     __tablename__ = "user_roles"
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String, unique=True, nullable=False)
-    role = Column(String, nullable=False)  # "admin" | "analyst" | "auditor"
+    password = Column(String, nullable=False)
+    role = Column(String, nullable=False)               # "admin" | "manager" | "storekeeper"
+    full_name = Column(String, nullable=True)
     created_at = Column(String, nullable=True)
+    must_change_password = Column(Boolean, default=False)
+    is_active = Column(Boolean, default=True)
+    last_login = Column(String, nullable=True)
+    failed_attempts = Column(Integer, default=0)
+    locked_until = Column(String, nullable=True)
 
-# Role permission matrix — defines what each role can do
+
+class ImportBatch(Base):
+    """Track data import wizard batches for audit trail and rollback."""
+    __tablename__ = "import_batches"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    batch_id = Column(String, unique=True, nullable=False, index=True)
+    import_type = Column(String, nullable=False)        # "items" | "suppliers" | "opening_stock"
+    filename = Column(String, nullable=True)
+    created_at = Column(String, nullable=False)
+    created_by = Column(String, nullable=True)
+    records_count = Column(Integer, default=0)
+    status = Column(String, default="committed")        # "committed" | "rolled_back"
+    details_json = Column(Text, nullable=True)
+
+
+class PilotReading(Base):
+    """Tracks before/after pilot KPI readings for the Business Impact tracker."""
+    __tablename__ = "pilot_readings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    kpi_key = Column(String(80), nullable=False)        # e.g. "stockouts_per_month"
+    kpi_name = Column(String(200), nullable=False)       # Human-readable label
+    category = Column(String(80), default="Operations")  # Operations / Procurement / Sales
+    unit = Column(String(40), default="")               # incidents/mo, mins, %, hours
+    higher_is_better = Column(Boolean, default=False)   # False for "lower is better"
+    baseline_value = Column(Float, nullable=False)      # Before-pilot measurement
+    baseline_date = Column(String(20), nullable=True)   # ISO date string
+    measured_value = Column(Float, nullable=True)       # After-pilot measurement
+    measured_date = Column(String(20), nullable=True)   # ISO date string
+    target_value = Column(Float, nullable=True)         # Goal value
+    notes = Column(Text, nullable=True)
+    recorded_by = Column(String(80), default="system")
+    created_at = Column(String(30), nullable=True)
+    updated_at = Column(String(30), nullable=True)
+
+
 ROLE_PERMISSIONS = {
-    "admin":   ["view_all", "resolve", "dismiss", "export", "retrain", "configure"],
-    "analyst": ["view_all", "resolve", "dismiss", "export"],
-    "auditor": ["view_all", "export"],  # Read-only + export, no state changes
+    "admin":       ["view_all", "adjust_stock", "stock_in", "stock_out", "create_po", "approve_po", "manage_suppliers", "manage_items", "export", "configure"],
+    "manager":     ["view_all", "create_po", "approve_po", "export", "view_reports"],
+    "storekeeper": ["view_all", "adjust_stock", "stock_in", "stock_out"],
 }
 
+# Type Aliases for code clarity
+Item = Inventory
+Supplier = Vendor
+StockMovementRecord = StockMovement
+PurchaseOrder = Procurement
+PurchaseOrderItem = POItem
+User = UserRole
 
 
-# ─── F6: Vendor Contract Compliance ──────────────────────────────────
-class VendorContract(Base):
-    """Stores uploaded MSA/contract text for NLP compliance checking."""
-    __tablename__ = "vendor_contracts"
-    id            = Column(Integer, primary_key=True, autoincrement=True)
-    vendor_id     = Column(String, ForeignKey("vendors.id"), nullable=False)
-    contract_text = Column(Text, nullable=False)
-    uploaded_at   = Column(String)
-    active        = Column(Boolean, default=True)
+DEFAULT_APP_SETTINGS = {
+    "auto_reorder_enabled": "true",
+    "scan_interval_minutes": "5",
+    "smart_qty_enabled": "true",
+    "safety_days": "14",
+    "service_level": "95%",
+    "safety_stock_method": "safety_days",
+    "auto_approve_enabled": "false",
+    "auto_approve_limit": "25000",
+    "auto_approve_min_supplier_rating": "4.0",
+    "overdue_alerts_enabled": "true",
+    "email_on_approval": "true",
+    "digest_time": "08:00",
+    "owner_email": "owner@anishkaindustries.com",
+    "tally_company_name": "Anishka Industries",
+    "tally_sales_ledger": "Sales Account",
+    "tally_purchase_ledger": "Purchase Account",
+    "tally_output_cgst_ledger": "Output CGST",
+    "tally_output_sgst_ledger": "Output SGST",
+    "tally_output_igst_ledger": "Output IGST",
+    "tally_input_cgst_ledger": "Input CGST",
+    "tally_input_sgst_ledger": "Input SGST",
+    "tally_input_igst_ledger": "Input IGST",
+    "tally_round_off_ledger": "Round Off",
+    "tally_cash_ledger": "Cash Account",
+    "tally_bank_ledger": "HDFC Bank Ltd",
+}
 
-
-# ─── F7: Digital Twin / IoT Inventory Sync ───────────────────────────
-class InventoryItem(Base):
-    """IoT-synced inventory items with reorder automation."""
-    __tablename__ = "inventory_items"
-    id                  = Column(Integer, primary_key=True, autoincrement=True)
-    item_id             = Column(String, unique=True, nullable=False, index=True)
-    name                = Column(String)
-    quantity            = Column(Float, default=0)
-    reorder_point       = Column(Float, default=10)    # triggers auto PO draft below this
-    reorder_qty         = Column(Float, default=50)    # quantity to order on auto-draft
-    unit                = Column(String, default="units")
-    location            = Column(String, default="Warehouse A")
-    preferred_vendor_id = Column(String, ForeignKey("vendors.id"), nullable=True)
-    last_synced         = Column(String)               # ISO datetime of last IoT ping
-
-
-class PurchaseOrderDraft(Base):
-    """Auto-raised PO drafts for procurement team approval."""
-    __tablename__ = "purchase_order_drafts"
-    id          = Column(Integer, primary_key=True, autoincrement=True)
-    vendor_id   = Column(String, ForeignKey("vendors.id"), nullable=True)
-    item_name   = Column(String)
-    quantity    = Column(Float)
-    status      = Column(String, default="Draft")  # Draft, Approved, Rejected
-    created_at  = Column(String)
-    auto_raised = Column(Boolean, default=False)   # True = system-raised, not human
-
-
-class TrendMetric(Base):
-    """Track trends over time for analytics."""
-    __tablename__ = "trend_metrics"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    date = Column(String)  # ISO date string
-    metric_type = Column(String)  # 'shadow_count', 'vendor_risk', 'department_activity', 'category_distribution'
-    value = Column(Float)
-    category = Column(String, nullable=True)  # e.g., vendor name or department name
-    details = Column(Text, nullable=True)  # JSON string for additional data
-
-
-class ActionLog(Base):
-    """Track actions taken by analysts on shadow purchases."""
-    __tablename__ = "action_logs"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    shadow_id = Column(Integer, ForeignKey("shadow_purchases.id"), nullable=True)
-    timestamp = Column(String, nullable=False)  # ISO format
-    action_type = Column(String, nullable=False)  # 'convert_to_po', 'flag_vendor', 'mark_justified', 'escalate_audit'
-    user = Column(String, default="System Administrator")
-    notes = Column(Text, nullable=True)
-    resolved = Column(Boolean, default=False)
-
-
-# ==============================================================================
-#  PREVENTIVE INTELLIGENCE LAYER - NEW TABLES
-# ==============================================================================
-
-class InventoryConfidence(Base):
-    """Tracks per-item confidence score for the Preventive Intelligence Layer."""
-    __tablename__ = "inventory_confidence"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    item_id = Column(String, ForeignKey("inventory.id"), nullable=False, unique=True)
-    confidence_score = Column(Float, default=50.0)          # 0-100 computed score
-    last_verified = Column(String, nullable=True)            # ISO timestamp when last verified
-    mismatch_count = Column(Integer, default=0)              # Number of historical mismatches
-    verification_status = Column(String, default="unverified")  # unverified | partial | verified | mismatch_reported
-    source = Column(String, default="ai_auto_update")        # ai_auto_update | manual
-    
-class VerificationTask(Base):
-    """Tasks generated when confidence decays or user overrides an AI recommendation."""
-    __tablename__ = "verification_tasks"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    sku = Column(String, nullable=False)
-    location = Column(String, nullable=True)
-    priority = Column(String, default="standard")  # standard | urgent
-    reason = Column(String, nullable=True)
-    requested_at = Column(String, nullable=False)
-    status = Column(String, default="pending")  # pending | physically_confirmed
-    verifier_id = Column(String, nullable=True)
-
-
-class ConfidenceDecayLog(Base):
-    """Log of automated confidence decay events."""
-    __tablename__ = "confidence_decay_log"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    sku = Column(String, nullable=False)
-    delta = Column(Float, nullable=False)
-    reason = Column(String, nullable=False)
-    timestamp = Column(String, nullable=False)
-
-
-class RetrievalLog(Base):
-    """Historical log of actual retrieval times for items."""
-    __tablename__ = "retrieval_logs"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    item_id = Column(String, ForeignKey("inventory.id"), nullable=False)
-    warehouse_location = Column(String, nullable=True)
-    retrieval_time_minutes = Column(Float, nullable=False)   # Actual retrieval time
-    logged_at = Column(String, nullable=False)               # ISO timestamp
-    logged_by = Column(String, default="System")             # Who logged it
-
-
-class EmergencyDecisionLog(Base):
-    """Audit trail for every emergency decision the system makes."""
-    __tablename__ = "emergency_decision_logs"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    item_id = Column(String, nullable=True)                  # Inventory item queried
-    part_name = Column(String, nullable=False)               # Part name searched
-    confidence_score = Column(Float, default=0.0)            # Score at time of decision
-    retrieval_time = Column(Float, nullable=True)            # Estimated retrieval time
-    decision = Column(String, nullable=False)                # "Use Internal Stock" | "Proceed with Procurement" etc
-    reason = Column(Text, nullable=True)                     # Human-readable explanation
-    user_proceeded = Column(Boolean, nullable=True)          # Did user follow recommendation?
-    user_action = Column(String, nullable=True)              # "followed" | "overridden"
-    logged_at = Column(String, nullable=False)               # ISO timestamp
-    department = Column(String, nullable=True)               # Department making request
-    severity = Column(String, default="safe")                # safe | caution | critical
-    verification_result = Column(String, nullable=True)      # "Found" | "Missing" | "Partial"
-    quantity_adjusted = Column(Integer, default=0)           # If manual check modified inventory
-    estimated_cost_avoided = Column(Float, default=0.0)      # Added for Phase 6 metrics
-
-
-
-class UnifiedEvent(Base):
-    """Module 1: Unified Data Ingestion Layer for all operational signals."""
-    __tablename__ = "unified_events"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    event_id = Column(String, unique=True, nullable=False)
-    source = Column(String, nullable=False) # financial, maintenance, inventory, logistics, workforce
-    timestamp = Column(String, nullable=False)
-    machine_id = Column(String, nullable=True)
-    location_id = Column(String, nullable=True)
-    vendor_id = Column(String, nullable=True)
-    raw_text = Column(Text, nullable=True)
-    amount = Column(Float, nullable=True)
-    item_guess = Column(String, nullable=True)
-    evidence_strength = Column(Float, default=0.5)
-
-
-class LivingRiskScore(Base):
-    """Module 4: Dynamic Danger/Risk score."""
-    __tablename__ = "living_risk_scores"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    item_id = Column(String, ForeignKey("inventory.id"), nullable=True)
-    transaction_id = Column(String, nullable=True)
-    risk_score = Column(Float, default=0.0)
-    last_updated = Column(String, nullable=False)
-    factors = Column(Text, nullable=True) # JSON of risk factors
-
-
-class InventoryCorrectionLedger(Base):
-    """Module 7: Immutable audit chain for inventory corrections."""
-    __tablename__ = "inventory_corrections"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    item_id = Column(String, ForeignKey("inventory.id"), nullable=False)
-    proposed_quantity_change = Column(Integer, nullable=False)
-    status = Column(String, default="Pending") # Pending, Auto-posted, Review-required, Rolled-back
-    evidence_source = Column(String, nullable=True)
-    reason_code = Column(String, nullable=True)
-    timestamp = Column(String, nullable=False)
-    version_id = Column(Integer, default=1)
-
-
-class TrustMomentum(Base):
-    """Module 8: Trust repair and behavior change tracking."""
-    __tablename__ = "trust_momentum"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    employee_id = Column(String, nullable=False)
-    department = Column(String, nullable=False)
-    trust_score = Column(Float, default=50.0)
-    savings_metrics = Column(Float, default=0.0)
-    downtime_avoided_hours = Column(Float, default=0.0)
-    last_updated = Column(String, nullable=False)
-
-
-# ==============================================================================
-#  NETWORK MESH LAYER - NEW TABLES
-# ==============================================================================
-
-class InventoryLocations(Base):
-    """Tracks inventory spread across multiple warehouses."""
-    __tablename__ = "inventory_locations"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    item_id = Column(String, ForeignKey("inventory.id"), nullable=False)
-    warehouse_id = Column(String, nullable=False)
-    quantity = Column(Integer, default=0)
-    last_updated = Column(String, nullable=False)
-
-class WarehouseTransferCosts(Base):
-    """Tracks time and financial cost of moving parts between warehouses."""
-    __tablename__ = "warehouse_transfer_costs"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    source_warehouse = Column(String, nullable=False)
-    destination_warehouse = Column(String, nullable=False)
-    estimated_hours = Column(Float, nullable=False)
-    transfer_cost = Column(Float, nullable=False)
-
-class ShiftRoster(Base):
-    """Models staff availability per warehouse."""
-    __tablename__ = "shift_roster"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    warehouse_id = Column(String, nullable=False)
-    shift_name = Column(String, nullable=False)
-    staff_count = Column(Integer, default=0)
-    start_time = Column(String, nullable=False) # e.g., "08:00"
-    end_time = Column(String, nullable=False)   # e.g., "16:00"
-
-class WarehouseAccess(Base):
-    """Tracks which departments/users can access which warehouses."""
-    __tablename__ = "warehouse_access"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    department = Column(String, nullable=False)
-    warehouse_id = Column(String, nullable=False)
-    access_level = Column(String, default="Standard")
-
-
-# ==============================================================================
-#  PHASE 3 TO 6 TABLES
-# ==============================================================================
-
-class PartsCompatibility(Base):
-    __tablename__ = "parts_compatibility"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    primary_sku = Column(String, nullable=False)
-    substitute_sku = Column(String, nullable=False)
-    compatibility_score = Column(Integer, default=100)
-    validated_by = Column(String, default="unvalidated") # 'oem', 'engineer_approved', 'unvalidated'
-    safe_for_critical = Column(Boolean, default=False)
-
-class MachineCriticality(Base):
-    __tablename__ = "machine_criticality"
-    machine_id = Column(String, primary_key=True)
-    criticality_level = Column(String, default="standard") # 'critical', 'high', 'standard'
-    downtime_cost_per_hour = Column(Float, default=0.0)
-
-class ItemSynonyms(Base):
-    __tablename__ = "item_synonyms"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    canonical_sku = Column(String, nullable=False)
-    synonym = Column(String, nullable=False)
-    source = Column(String, default="auto_learned") # 'manual', 'auto_learned'
-
-class RiskScoreHistory(Base):
-    __tablename__ = "risk_score_history"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    shadow_id = Column(Integer, ForeignKey("shadow_purchases.id"), nullable=False)
-    score = Column(Float, nullable=False)
-    timestamp = Column(String, nullable=False)
-    trigger_event = Column(String, nullable=False)
-
-class MachineUsageLog(Base):
-    __tablename__ = "machine_usage_log"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    machine_id = Column(String, nullable=False)
-    part_sku = Column(String, nullable=False)
-    event_type = Column(String, nullable=False) # 'replacement', 'failure', 'scheduled_maintenance'
-    event_date = Column(String, nullable=False) # ISO date
-    quantity_used = Column(Integer, default=1)
-
-class DepletionAlerts(Base):
-    __tablename__ = "depletion_alerts"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    sku = Column(String, nullable=False)
-    predicted_need_date = Column(String, nullable=False) # ISO date
-    confidence = Column(Float, default=0.0)
-    suggested_order_qty = Column(Integer, default=0)
-    status = Column(String, default="pending")
-    created_at = Column(String, nullable=False) # ISO timestamp
-
-class SignalEvents(Base):
-    __tablename__ = "signal_events"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    source_type = Column(String, nullable=False) # 'gate_entry', 'petty_cash', 'dept_transfer'
-    timestamp = Column(String, nullable=False) # ISO timestamp
-    raw_data = Column(Text, nullable=False) # JSON data
-    correlated_shadow_id = Column(Integer, ForeignKey("shadow_purchases.id"), nullable=True)
-
-class UserTrustMetrics(Base):
-    __tablename__ = "user_trust_metrics"
-    user_id = Column(String, primary_key=True)
-    total_checks = Column(Integer, default=0)
-    followed_recommendations = Column(Integer, default=0)
-    overrides_that_were_correct = Column(Integer, default=0)
-    internal_retrievals_successful = Column(Integer, default=0)
-    estimated_cost_saved = Column(Float, default=0.0)
-    estimated_time_saved_minutes = Column(Integer, default=0)
-    trust_score = Column(Float, default=50.0)
-
-
-def init_db():
-    """Create tables and seed from CSV files."""
-    Base.metadata.create_all(bind=engine)
-    db = SessionLocal()
-
-    # Add some seed trends if empty
-    from database import TrendMetric, RiskSnapshot
-    if not db.query(TrendMetric).first():
-        today = datetime.date.today()
-        for i in range(10):
-            d = (today - datetime.timedelta(days=10-i)).isoformat()
-            db.add(TrendMetric(date=d, metric_type="shadow_count", value=float(random.randint(5, 20))))
-            db.add(TrendMetric(date=d, metric_type="financial_exposure", value=float(random.randint(5000, 15000))))
-            db.add(RiskSnapshot(
-                timestamp=d + "T12:00:00",
-                total_exposure=float(random.randint(5000, 15000)),
-                shadow_rate=0.1 + (random.random() * 0.1),
-                avg_risk_score=0.3 + (random.random() * 0.4),
-                high_risk_count=random.randint(1, 5),
-                risk_level="Medium",
-                pending_actions=random.randint(5, 10)
+def seed_default_settings(db):
+    """Seed default automation settings if missing."""
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for key, val in DEFAULT_APP_SETTINGS.items():
+        existing = db.query(AppSetting).filter(AppSetting.key == key).first()
+        if not existing:
+            db.add(AppSetting(
+                key=key,
+                value=val,
+                updated_by="system",
+                updated_at=now_str
             ))
-        db.commit()
-
-    # Only seed CSV data if empty
-    from database import Vendor
-    if db.query(Vendor).first():
-        db.close()
-        return
-
-    data_dir = os.path.join(os.path.dirname(__file__), "data")
-
-    # Vendors
-    with open(os.path.join(data_dir, "vendors.csv")) as f:
-        for row in csv.DictReader(f):
-            trust = {"Low": 80, "Medium": 50, "High": 20}.get(row["risk_level"], 50)
-            db.add(Vendor(id=row["id"], name=row["name"], category=row["category"],
-                          risk_level=row["risk_level"], approved=row["approved"] == "True",
-                          avg_order=float(row["avg_order"]), trust_score=float(trust)))
-
-    # Inventory
-    with open(os.path.join(data_dir, "inventory.csv")) as f:
-        for row in csv.DictReader(f):
-            db.add(Inventory(id=row["id"], name=row["name"], sku=row["sku"],
-                             quantity=int(row["quantity"]), unit_price=float(row["unit_price"]),
-                             category=row["category"], reorder_level=int(row["reorder_level"]),
-                             location=row["location"]))
-
-    # Procurement
-    with open(os.path.join(data_dir, "procurement_records.csv")) as f:
-        for row in csv.DictReader(f):
-            db.add(Procurement(id=row["id"], vendor_id=row["vendor_id"], vendor_name=row["vendor_name"],
-                               item=row["item"], amount=float(row["amount"]), quantity=int(row["quantity"]),
-                               date=row["date"], status=row["status"], department=row["department"]))
-
-    # Transactions
-    with open(os.path.join(data_dir, "financial_transactions.csv")) as f:
-        for row in csv.DictReader(f):
-            db.add(Transaction(id=row["id"], date=row["date"], vendor=row["vendor"],
-                               amount=float(row["amount"]), description=row["description"],
-                               payment_type=row["payment_type"], card_holder=row["card_holder"],
-                               department=row["department"]))
-
-    # Seed Network Mesh Data
-    from database import WarehouseTransferCosts, ShiftRoster
-    if not db.query(WarehouseTransferCosts).first():
-        db.add_all([
-            WarehouseTransferCosts(source_warehouse="WH-Alpha", destination_warehouse="WH-Beta", estimated_hours=4.0, transfer_cost=150.0),
-            WarehouseTransferCosts(source_warehouse="WH-Beta", destination_warehouse="WH-Alpha", estimated_hours=4.5, transfer_cost=165.0),
-            WarehouseTransferCosts(source_warehouse="WH-Alpha", destination_warehouse="WH-Gamma", estimated_hours=12.0, transfer_cost=450.0)
-        ])
-    if not db.query(ShiftRoster).first():
-        db.add_all([
-            ShiftRoster(warehouse_id="WH-Alpha", shift_name="Morning", staff_count=5, start_time="06:00", end_time="14:00"),
-            ShiftRoster(warehouse_id="WH-Alpha", shift_name="Evening", staff_count=2, start_time="14:00", end_time="22:00"),
-            ShiftRoster(warehouse_id="WH-Beta", shift_name="Day", staff_count=8, start_time="08:00", end_time="18:00"),
-            ShiftRoster(warehouse_id="WH-Beta", shift_name="Night", staff_count=0, start_time="18:00", end_time="08:00")
-        ])
-
-    from database import ItemSynonyms
-    if not db.query(ItemSynonyms).first():
-        db.add_all([
-            ItemSynonyms(canonical_sku="SKU-BRG-6204", synonym="BRG-6204-ZZ", source="manual"),
-            ItemSynonyms(canonical_sku="SKU-BRG-6204", synonym="bearing 6204", source="manual"),
-            ItemSynonyms(canonical_sku="SKU-BRG-6204", synonym="deep groove ball bearing 20mm", source="manual"),
-            ItemSynonyms(canonical_sku="SKU-BRG-6204", synonym="roulement 6204", source="manual")
-        ])
-
     db.commit()
-    db.close()
-    print("[OK] Database initialized and seeded.")
+
+
+# ─── Database Initialization ─────────────────────────────────────────
+
+def init_db(reseed: bool = False):
+    """Create all tables and seed realistic welding data if empty or requested."""
+    if reseed and "sqlite" in DATABASE_URL:
+        db_path = DATABASE_URL.replace("sqlite:///", "")
+        if os.path.exists(db_path):
+            try:
+                # Close any active connections by disposing engine
+                engine.dispose()
+                for ext in ["", "-shm", "-wal"]:
+                    p = db_path + ext
+                    if os.path.exists(p):
+                        os.remove(p)
+                print(f"[OK] Removed existing database: {db_path}")
+            except Exception as e:
+                print(f"[WARN] Could not delete DB file directly: {e}")
+
+    Base.metadata.create_all(bind=engine)
+
+    # SQLite migrations for added columns
+    if "sqlite" in DATABASE_URL:
+        with engine.connect() as conn:
+            # po_items columns
+            po_cols = [r[1] for r in conn.exec_driver_sql("PRAGMA table_info(po_items)").fetchall()]
+            if "received_qty" not in po_cols:
+                conn.exec_driver_sql("ALTER TABLE po_items ADD COLUMN received_qty INTEGER DEFAULT 0")
+            if "reason" not in po_cols:
+                conn.exec_driver_sql("ALTER TABLE po_items ADD COLUMN reason TEXT")
+
+            # purchase_orders columns
+            po_table_cols = [r[1] for r in conn.exec_driver_sql("PRAGMA table_info(purchase_orders)").fetchall()]
+            if "auto_approved" not in po_table_cols:
+                conn.exec_driver_sql("ALTER TABLE purchase_orders ADD COLUMN auto_approved BOOLEAN DEFAULT 0")
+            if "delivery_challan_no" not in po_table_cols:
+                conn.exec_driver_sql("ALTER TABLE purchase_orders ADD COLUMN delivery_challan_no VARCHAR")
+            if "delivery_doc_path" not in po_table_cols:
+                conn.exec_driver_sql("ALTER TABLE purchase_orders ADD COLUMN delivery_doc_path VARCHAR")
+
+            # suppliers email, gstin, state columns
+            sup_table_cols = [r[1] for r in conn.exec_driver_sql("PRAGMA table_info(suppliers)").fetchall()]
+            if "email" not in sup_table_cols:
+                conn.exec_driver_sql("ALTER TABLE suppliers ADD COLUMN email VARCHAR(120)")
+            if "gstin" not in sup_table_cols:
+                conn.exec_driver_sql("ALTER TABLE suppliers ADD COLUMN gstin VARCHAR(20)")
+            if "state" not in sup_table_cols:
+                conn.exec_driver_sql("ALTER TABLE suppliers ADD COLUMN state VARCHAR(50) DEFAULT 'Haryana'")
+            if "import_batch_id" not in sup_table_cols:
+                conn.exec_driver_sql("ALTER TABLE suppliers ADD COLUMN import_batch_id VARCHAR")
+
+            # items columns: reserved_qty, hsn_code, gst_rate
+            item_table_cols = [r[1] for r in conn.exec_driver_sql("PRAGMA table_info(items)").fetchall()]
+            if "reserved_qty" not in item_table_cols:
+                conn.exec_driver_sql("ALTER TABLE items ADD COLUMN reserved_qty INTEGER DEFAULT 0")
+            if "hsn_code" not in item_table_cols:
+                conn.exec_driver_sql("ALTER TABLE items ADD COLUMN hsn_code VARCHAR(30) DEFAULT '8466'")
+            if "gst_rate" not in item_table_cols:
+                conn.exec_driver_sql("ALTER TABLE items ADD COLUMN gst_rate FLOAT DEFAULT 18.0")
+            if "import_batch_id" not in item_table_cols:
+                conn.exec_driver_sql("ALTER TABLE items ADD COLUMN import_batch_id VARCHAR")
+
+            # stock_movements columns: client_id
+            sm_table_cols = [r[1] for r in conn.exec_driver_sql("PRAGMA table_info(stock_movements)").fetchall()]
+            if "client_id" not in sm_table_cols:
+                conn.exec_driver_sql("ALTER TABLE stock_movements ADD COLUMN client_id VARCHAR")
+            if "import_batch_id" not in sm_table_cols:
+                conn.exec_driver_sql("ALTER TABLE stock_movements ADD COLUMN import_batch_id VARCHAR")
+
+            # customers columns: whatsapp_opt_out
+            cust_table_cols = [r[1] for r in conn.exec_driver_sql("PRAGMA table_info(customers)").fetchall()]
+            if "whatsapp_opt_out" not in cust_table_cols:
+                conn.exec_driver_sql("ALTER TABLE customers ADD COLUMN whatsapp_opt_out BOOLEAN DEFAULT 0")
+
+            # outbox columns: channel, sender, recipient_phone, template_lang, ref_type, ref_id
+            outbox_cols = [r[1] for r in conn.exec_driver_sql("PRAGMA table_info(outbox)").fetchall()]
+            if "channel" not in outbox_cols:
+                conn.exec_driver_sql("ALTER TABLE outbox ADD COLUMN channel VARCHAR(20) DEFAULT 'EMAIL'")
+            if "sender" not in outbox_cols:
+                conn.exec_driver_sql("ALTER TABLE outbox ADD COLUMN sender VARCHAR(50) DEFAULT 'system'")
+            if "recipient_phone" not in outbox_cols:
+                conn.exec_driver_sql("ALTER TABLE outbox ADD COLUMN recipient_phone VARCHAR(30)")
+            if "template_lang" not in outbox_cols:
+                conn.exec_driver_sql("ALTER TABLE outbox ADD COLUMN template_lang VARCHAR(10) DEFAULT 'en'")
+            if "ref_type" not in outbox_cols:
+                conn.exec_driver_sql("ALTER TABLE outbox ADD COLUMN ref_type VARCHAR(30)")
+            if "ref_id" not in outbox_cols:
+                conn.exec_driver_sql("ALTER TABLE outbox ADD COLUMN ref_id VARCHAR(50)")
+
+            # user_roles security columns
+            ur_cols = [r[1] for r in conn.exec_driver_sql("PRAGMA table_info(user_roles)").fetchall()]
+            if "must_change_password" not in ur_cols:
+                conn.exec_driver_sql("ALTER TABLE user_roles ADD COLUMN must_change_password BOOLEAN DEFAULT 0")
+            if "is_active" not in ur_cols:
+                conn.exec_driver_sql("ALTER TABLE user_roles ADD COLUMN is_active BOOLEAN DEFAULT 1")
+            if "last_login" not in ur_cols:
+                conn.exec_driver_sql("ALTER TABLE user_roles ADD COLUMN last_login VARCHAR")
+            if "failed_attempts" not in ur_cols:
+                conn.exec_driver_sql("ALTER TABLE user_roles ADD COLUMN failed_attempts INTEGER DEFAULT 0")
+            if "locked_until" not in ur_cols:
+                conn.exec_driver_sql("ALTER TABLE user_roles ADD COLUMN locked_until VARCHAR")
+
+    db = SessionLocal()
+    try:
+        # Check if already seeded
+        has_items = db.query(Inventory).first()
+        if not has_items or reseed:
+            from seed_data import seed_database
+            seed_database(db)
+            print("[OK] Database initialized and seeded with complete welding catalog.")
+        # Ensure all suppliers have demo order emails
+        import re as _re
+        for v in db.query(Vendor).all():
+            if not v.email:
+                slug = _re.sub(r'[^a-z0-9]', '', (v.name or v.id).lower())[:15]
+                v.email = f"orders@{slug}.example"
+
+        # Fix any existing items whose supplier_id is not a real supplier
+        valid_supplier_ids = {v.id for v in db.query(Vendor.id).all()}
+        for item in db.query(Inventory).filter(Inventory.supplier_id != None).all():
+            if item.supplier_id not in valid_supplier_ids:
+                item.supplier_id = None
+        db.commit()
+        seed_default_settings(db)
+        try:
+            from business_impact import seed_default_pilot_kpis
+            seed_default_pilot_kpis(db)
+        except Exception as e:
+            print(f"[WARN] Could not seed default pilot KPIs: {e}")
+    finally:
+        db.close()
 
 
 if __name__ == "__main__":
-    init_db()
+    init_db(reseed=True)

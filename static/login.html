@@ -3,141 +3,598 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ShadowSync — Secure Login</title>
-
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%2300234B'/><text y='.9em' x='18' font-size='70'>⚡</text></svg>">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <title>Anishka Inventory · Industrial Welding Spares Management</title>
+    <!-- PWA Meta Tags -->
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#00234B">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Anishka">
+    <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230E0F12'/><text y='.75em' x='15' font-size='55' fill='%233DA9FF' font-weight='bold'>AI</text></svg>">
+    <link rel="stylesheet" href="/static/styles.css">
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            display: flex; align-items: center; justify-content: center;
+            margin: 0;
+            padding: 0;
             min-height: 100vh;
-            background: linear-gradient(135deg, #000e24 0%, #001a3d 40%, #00234b 100%);
-            overflow: hidden;
-            -webkit-font-smoothing: antialiased;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #0E0F12;
+            color: #E8EAF0;
+            overflow-x: hidden;
+            font-family: 'Space Grotesk', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            position: relative;
         }
-        /* Ambient glow orbs */
-        body::before {
-            content: '';
-            position: fixed; top: -150px; left: -150px;
-            width: 500px; height: 500px;
-            background: radial-gradient(circle, rgba(0, 106, 106, 0.15) 0%, transparent 70%);
+
+        /* Spark Canvas Background */
+        #sparkCanvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
             pointer-events: none;
+            z-index: 1;
         }
-        body::after {
-            content: '';
-            position: fixed; bottom: -150px; right: -150px;
-            width: 500px; height: 500px;
-            background: radial-gradient(circle, rgba(255, 191, 0, 0.06) 0%, transparent 70%);
-            pointer-events: none;
-        }
-        .login-container {
-            width: 100%; max-width: 440px; padding: 44px;
-            background: rgba(255, 255, 255, 0.06);
-            backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+
+        .login-wrapper {
+            position: relative;
+            z-index: 2;
+            display: grid;
+            grid-template-columns: 1.15fr 1fr;
+            width: 100%;
+            max-width: 1040px;
+            min-height: 600px;
+            margin: 24px;
+            background: rgba(22, 24, 29, 0.88);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
             border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: 20px;
-            box-shadow: 0 25px 60px -12px rgba(0, 0, 0, 0.5);
-            animation: fadeIn 0.6s ease-out;
-            position: relative; z-index: 1;
+            box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.7), 0 0 40px rgba(61, 169, 255, 0.12);
+            overflow: hidden;
         }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-        .login-logo {
-            width: 56px; height: 56px;
-            background: linear-gradient(135deg, #006a6a, #008a8a);
-            border-radius: 14px; display: flex; align-items: center; justify-content: center;
-            font-size: 20px; font-weight: 800; color: #fff; margin: 0 auto 24px;
-            font-family: 'Manrope', sans-serif;
-            box-shadow: 0 0 30px rgba(0, 106, 106, 0.3);
+
+        /* Brand Left Panel */
+        .brand-panel {
+            padding: 48px;
+            background: linear-gradient(145deg, #12141A 0%, #181B23 100%);
+            border-right: 1px solid rgba(255, 255, 255, 0.06);
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            position: relative;
+            overflow: hidden;
         }
-        .login-header { text-align: center; margin-bottom: 36px; }
-        .login-header h2 {
-            font-size: 26px; margin-bottom: 8px; letter-spacing: -0.02em;
-            font-family: 'Manrope', sans-serif; font-weight: 800; color: #fff;
+
+        .brand-panel::before {
+            content: '';
+            position: absolute;
+            top: -100px;
+            left: -100px;
+            width: 320px;
+            height: 320px;
+            background: radial-gradient(circle, rgba(61, 169, 255, 0.15) 0%, transparent 70%);
+            pointer-events: none;
         }
-        .login-header p { color: rgba(255, 255, 255, 0.45); font-size: 13px; }
-        .form-group { margin-bottom: 22px; }
-        .form-group label {
-            display: block; font-size: 11px; font-weight: 600;
-            color: rgba(255, 255, 255, 0.45);
-            margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.06em;
+
+        .brand-panel::after {
+            content: '';
+            position: absolute;
+            bottom: -80px;
+            right: -80px;
+            width: 260px;
+            height: 260px;
+            background: radial-gradient(circle, rgba(255, 122, 26, 0.12) 0%, transparent 70%);
+            pointer-events: none;
         }
-        .form-group input { 
-            width: 100%; padding: 13px 16px;
-            background: rgba(255, 255, 255, 0.06);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 12px;
-            color: #fff; font-family: 'Inter', sans-serif; font-size: 14px;
-            transition: all 0.2s ease;
+
+        .brand-header {
+            position: relative;
+            z-index: 2;
         }
-        .form-group input::placeholder { color: rgba(255, 255, 255, 0.25); }
-        .form-group input:focus {
-            outline: none;
-            border-color: #006a6a;
-            box-shadow: 0 0 0 4px rgba(0, 106, 106, 0.15);
+
+        .brand-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 14px;
+            border-radius: 999px;
+            background: rgba(61, 169, 255, 0.1);
+            border: 1px solid rgba(61, 169, 255, 0.25);
+            color: #6AD1FF;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            margin-bottom: 24px;
         }
-        .login-btn { 
-            width: 100%; padding: 14px;
-            background: linear-gradient(135deg, #006a6a, #008a8a);
-            color: #fff; border: none; border-radius: 12px; font-weight: 700;
-            font-size: 13px; cursor: pointer; transition: all 0.3s ease;
-            box-shadow: 0 4px 20px rgba(0, 106, 106, 0.3); margin-top: 8px;
-            text-transform: uppercase; letter-spacing: 0.05em;
-            font-family: 'Inter', sans-serif;
+
+        .brand-badge .arc-spark {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #3DA9FF;
+            box-shadow: 0 0 10px #6AD1FF;
+            animation: sparkPulse 1.8s infinite alternate;
         }
-        .login-btn:hover {
-            transform: translateY(-2px);
-            filter: brightness(1.15);
-            box-shadow: 0 8px 28px rgba(0, 106, 106, 0.4);
+
+        @keyframes sparkPulse {
+            0% { transform: scale(0.8); opacity: 0.6; }
+            100% { transform: scale(1.3); opacity: 1; }
         }
-        .login-btn:active { transform: translateY(0) scale(0.98); }
-        .err-msg {
-            color: #ffdad6; font-size: 12px; text-align: center;
-            margin-top: 16px; display: none;
-            background: rgba(186, 26, 26, 0.15);
-            padding: 10px; border-radius: 8px;
+
+        .brand-title {
+            font-size: 32px;
+            font-weight: 800;
+            color: #FFFFFF;
+            letter-spacing: -0.03em;
+            line-height: 1.15;
+            margin-bottom: 12px;
         }
-        .footer-text {
-            margin-top: 28px; text-align: center;
-            font-size: 10px; color: rgba(255, 255, 255, 0.25);
+
+        .brand-title span {
+            background: linear-gradient(135deg, #3DA9FF 0%, #6AD1FF 50%, #FF7A1A 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .brand-desc {
+            color: #9BA3B4;
+            font-size: 14px;
             line-height: 1.6;
+            margin-bottom: 24px;
+        }
+
+        .features-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-bottom: 32px;
+            position: relative;
+            z-index: 2;
+        }
+
+        .feature-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 13px;
+            color: #C5CAD6;
+        }
+
+        .feature-icon {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #3DA9FF;
+            flex-shrink: 0;
+        }
+
+        .brand-meta {
+            padding-top: 24px;
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
+            font-size: 12px;
+            color: #5C6478;
+            line-height: 1.6;
+            position: relative;
+            z-index: 2;
+        }
+
+        .brand-meta strong {
+            color: #9BA3B4;
+        }
+
+        /* Form Right Panel */
+        .form-panel {
+            padding: 48px;
+            background: #16181D;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            position: relative;
+            z-index: 2;
+        }
+
+        .form-header {
+            margin-bottom: 28px;
+        }
+
+        .form-header h2 {
+            font-size: 24px;
+            font-weight: 700;
+            color: #FFFFFF;
+            letter-spacing: -0.02em;
+            margin-bottom: 6px;
+        }
+
+        .form-header p {
+            color: #9BA3B4;
+            font-size: 13px;
+        }
+
+        .input-group {
+            margin-bottom: 20px;
+            position: relative;
+        }
+
+        .input-group label {
+            display: block;
+            font-size: 11px;
+            font-weight: 700;
+            color: #828899;
+            text-transform: uppercase;
+            letter-spacing: 0.07em;
+            margin-bottom: 8px;
+        }
+
+        .input-group input {
+            width: 100%;
+            padding: 13px 16px;
+            background: #101216;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            color: #FFFFFF;
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 14px;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            box-sizing: border-box;
+        }
+
+        .input-group input:focus {
+            outline: none;
+            border-color: #3DA9FF;
+            box-shadow: 0 0 0 4px rgba(61, 169, 255, 0.18), 0 0 16px rgba(61, 169, 255, 0.25);
+            background: #13161D;
+        }
+
+        .submit-btn {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #3DA9FF 0%, #1F6EB8 100%);
+            color: #FFFFFF;
+            border: none;
+            border-radius: 10px;
+            font-weight: 700;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 4px 20px rgba(61, 169, 255, 0.35);
+            font-family: inherit;
+            letter-spacing: 0.02em;
+            margin-top: 6px;
+        }
+
+        .submit-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 28px rgba(61, 169, 255, 0.5);
+            filter: brightness(1.1);
+        }
+
+        .submit-btn:active {
+            transform: translateY(0);
+        }
+
+        .err-msg {
+            color: #FFA5A5;
+            background: rgba(239, 68, 68, 0.15);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-size: 12px;
+            margin-top: 16px;
+            display: none;
+            text-align: center;
+        }
+
+        /* RBAC Quick Login Cards */
+        .rbac-chips-box {
+            margin-top: 24px;
+            padding: 16px;
+            background: rgba(255, 255, 255, 0.025);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 12px;
+        }
+
+        .rbac-chips-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #7A8194;
+        }
+
+        .rbac-chips-header span:last-child {
+            color: #3DA9FF;
+            text-transform: none;
+            font-weight: 500;
+        }
+
+        .rbac-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 8px;
+        }
+
+        .role-chip-btn {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #111318;
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            border-radius: 8px;
+            padding: 8px 12px;
+            cursor: pointer;
+            font-family: inherit;
+            color: #E8EAF0;
+            transition: all 0.2s ease;
+            text-align: left;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        .role-chip-btn:hover {
+            border-color: #3DA9FF;
+            background: rgba(61, 169, 255, 0.08);
+            transform: translateX(3px);
+        }
+
+        .role-badge-tag {
+            font-size: 10px;
+            font-weight: 700;
+            padding: 2px 7px;
+            border-radius: 4px;
+            letter-spacing: 0.04em;
+        }
+
+        .role-admin-tag { background: rgba(61, 169, 255, 0.18); color: #6AD1FF; }
+        .role-manager-tag { background: rgba(34, 197, 94, 0.18); color: #86EFAC; }
+        .role-store-tag { background: rgba(250, 204, 21, 0.18); color: #FDE047; }
+
+        @media (max-width: 840px) {
+            .login-wrapper {
+                grid-template-columns: 1fr;
+                margin: 16px;
+            }
+            .brand-panel {
+                padding: 32px;
+            }
+            .form-panel {
+                padding: 32px;
+            }
+        }
+
+        /* Light Theme Overrides for Login */
+        html[data-theme="light"] body {
+            background: #F3F1EE;
+            color: #1E232E;
+        }
+        html[data-theme="light"] .login-wrapper {
+            background: rgba(255, 255, 255, 0.94);
+            border-color: rgba(0, 0, 0, 0.1);
+            box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.12), 0 0 30px rgba(61, 169, 255, 0.1);
+        }
+        html[data-theme="light"] .brand-panel {
+            background: linear-gradient(145deg, #F8FAFC 0%, #EEF2F6 100%);
+            border-right-color: rgba(0, 0, 0, 0.08);
+        }
+        html[data-theme="light"] .form-panel {
+            background: #FFFFFF;
+        }
+        html[data-theme="light"] .brand-title,
+        html[data-theme="light"] .form-title {
+            color: #0F172A;
+        }
+        html[data-theme="light"] .brand-desc {
+            color: #64748B;
+        }
+        html[data-theme="light"] .feature-item span {
+            color: #334155;
+        }
+        html[data-theme="light"] .input-group input {
+            background: #F8FAFC;
+            color: #0F172A;
+            border-color: rgba(0, 0, 0, 0.15);
+        }
+        html[data-theme="light"] .role-chip-btn {
+            background: #F8FAFC;
+            color: #1E293B;
+            border-color: rgba(0, 0, 0, 0.1);
         }
     </style>
 </head>
 <body>
-    <div class="login-container">
-        <div class="login-logo">SS</div>
-        <div class="login-header">
-            <h2>ShadowSync</h2>
-            <p>Kinetic Ledger · Authorized Access Only</p>
+    <!-- 3D Theme Switch in top-right -->
+    <div style="position:fixed; top:20px; right:24px; z-index:100;">
+        <button class="theme-switch-3d" id="themeToggle" role="switch" aria-checked="false" aria-label="Toggle theme: currently dark mode" onclick="toggleTheme(event)" title="Toggle Light/Dark Theme">
+            <span class="switch-track">
+                <!-- Night sky with twinkling stars -->
+                <span class="track-sky track-night">
+                    <span class="twinkle-star star-1">✦</span>
+                    <span class="twinkle-star star-2">★</span>
+                    <span class="twinkle-star star-3">✦</span>
+                    <span class="twinkle-star star-4">·</span>
+                </span>
+                <!-- Day sky with drifting clouds -->
+                <span class="track-sky track-day">
+                    <svg class="cloud-svg cloud-1" viewBox="0 0 24 14" fill="currentColor">
+                        <path d="M19.5 7.5A4.5 4.5 0 0 0 11.2 5 3.5 3.5 0 0 0 5 7a4 4 0 0 0 .5 7.9h14a3.5 3.5 0 0 0 0-7.4z"/>
+                    </svg>
+                    <svg class="cloud-svg cloud-2" viewBox="0 0 20 12" fill="currentColor">
+                        <path d="M16 6a3.5 3.5 0 0 0-6.8-1.5A3 3 0 0 0 4 6a3.5 3.5 0 0 0 .5 6.9h11.5A3 3 0 0 0 16 6z"/>
+                    </svg>
+                </span>
+            </span>
+
+            <!-- Raised sphere knob -->
+            <span class="switch-knob">
+                <!-- Moon face with craters -->
+                <span class="knob-face knob-moon">
+                    <svg viewBox="0 0 26 26" class="moon-svg">
+                        <defs>
+                            <radialGradient id="moonGradLogin" cx="35%" cy="30%" r="70%">
+                                <stop offset="0%" stop-color="#FFFFFF"/>
+                                <stop offset="50%" stop-color="#E2E8F0"/>
+                                <stop offset="100%" stop-color="#94A3B8"/>
+                            </radialGradient>
+                        </defs>
+                        <circle cx="13" cy="13" r="11" fill="url(#moonGradLogin)"/>
+                        <circle cx="9" cy="10" r="2.2" fill="#64748B" opacity="0.35"/>
+                        <circle cx="16" cy="15" r="2.6" fill="#64748B" opacity="0.35"/>
+                        <circle cx="15.5" cy="8.5" r="1.4" fill="#64748B" opacity="0.3"/>
+                        <circle cx="11.5" cy="18" r="1.6" fill="#64748B" opacity="0.3"/>
+                        <path d="M13 2 A11 11 0 0 0 24 13 A11 11 0 0 1 13 24 A11 11 0 0 1 13 2 Z" fill="#475569" opacity="0.18"/>
+                    </svg>
+                </span>
+
+                <!-- Sun face with rotating rays -->
+                <span class="knob-face knob-sun">
+                    <svg viewBox="0 0 26 26" class="sun-svg">
+                        <defs>
+                            <radialGradient id="sunGradLogin" cx="35%" cy="30%" r="70%">
+                                <stop offset="0%" stop-color="#FFFBEB"/>
+                                <stop offset="45%" stop-color="#FBBF24"/>
+                                <stop offset="100%" stop-color="#F59E0B"/>
+                            </radialGradient>
+                        </defs>
+                        <circle cx="13" cy="13" r="7.5" fill="url(#sunGradLogin)"/>
+                        <ellipse cx="11" cy="10.5" rx="3.5" ry="2" fill="#FFFFFF" opacity="0.65"/>
+                        <g class="sun-rays" stroke="#F59E0B" stroke-width="1.8" stroke-linecap="round">
+                            <line x1="13" y1="2" x2="13" y2="4.2"/>
+                            <line x1="13" y1="21.8" x2="13" y2="24"/>
+                            <line x1="2" y1="13" x2="4.2" y2="13"/>
+                            <line x1="21.8" y1="13" x2="24" y2="13"/>
+                            <line x1="5.2" y1="5.2" x2="6.8" y2="6.8"/>
+                            <line x1="19.2" y1="19.2" x2="20.8" y2="20.8"/>
+                            <line x1="5.2" y1="20.8" x2="6.8" y2="19.2"/>
+                            <line x1="19.2" y1="6.8" x2="20.8" y2="5.2"/>
+                        </g>
+                    </svg>
+                </span>
+            </span>
+
+            <span class="switch-ripple"></span>
+        </button>
+    </div>
+
+    <canvas id="sparkCanvas"></canvas>
+
+    <div class="login-wrapper">
+        <!-- Brand Presentation Panel -->
+        <div class="brand-panel">
+            <div class="brand-header">
+                <div class="brand-badge">
+                    <div class="arc-spark"></div>
+                    Industrial Precision · Kinetic Ledger v8.0
+                </div>
+                <h1 class="brand-title">Anishka <span>Inventory</span></h1>
+                <p class="brand-desc">Enterprise warehouse command and automated inventory control system engineered for industrial welding consumables, robotic automation, and supply chain continuity.</p>
+                
+                <div class="features-list">
+                    <div class="feature-item">
+                        <div class="feature-icon">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                        </div>
+                        <span>Live telemetry & automated replenishment forecasting</span>
+                    </div>
+                    <div class="feature-item">
+                        <div class="feature-icon">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                        </div>
+                        <span>Strict 3-tier Role-Based Access Control (RBAC)</span>
+                    </div>
+                    <div class="feature-item">
+                        <div class="feature-icon">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                        </div>
+                        <span>Sub-second WebSocket dispatch & cycle tracking</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="brand-meta">
+                <strong>Anishka Industries</strong><br>
+                Milestone Khandsa Road, Sector-10, Gurugram — 122001, Haryana<br>
+                Authorized Supplier of MIG, TIG & Robotics Welding Spares
+            </div>
         </div>
-        <form id="loginForm">
-            <div class="form-group">
-                <label>Identifier</label>
-                <input type="text" id="username" placeholder="Enter your business ID" required value="admin">
+
+        <!-- Authentication Form Panel -->
+        <div class="form-panel">
+            <div class="form-header">
+                <h2>Terminal Authentication</h2>
+                <p>Provide verified operator credentials to access the ledger.</p>
             </div>
-            <div class="form-group">
-                <label>Passcode</label>
-                <input type="password" id="password" placeholder="Enter secure key" required value="nexus2026">
+
+            <form id="loginForm">
+                <div class="input-group">
+                    <label>Operator Identifier</label>
+                    <input type="text" id="username" placeholder="admin, manager, or storekeeper" required value="admin">
+                </div>
+                <div class="input-group">
+                    <label>Security Passcode</label>
+                    <input type="password" id="password" placeholder="Enter secure passcode" required value="admin@2026">
+                </div>
+                <button type="submit" class="submit-btn" id="loginBtn">Authorize Session</button>
+                <div id="errorMessage" class="err-msg">Authorization rejected. Invalid operator credentials.</div>
+            </form>
+
+            <div class="rbac-chips-box">
+                <div class="rbac-chips-header">
+                    <span>Quick RBAC Switcher</span>
+                    <span>1-Click Autofill</span>
+                </div>
+                <div class="rbac-grid">
+                    <button type="button" class="role-chip-btn" onclick="fillCreds('admin', 'admin@2026')">
+                        <div>
+                            <span style="font-weight:700;">admin</span>
+                            <span style="font-size:11px; color:#5C6478; margin-left:8px;">Full Store Authority</span>
+                        </div>
+                        <span class="role-badge-tag role-admin-tag">ADMIN</span>
+                    </button>
+                    <button type="button" class="role-chip-btn" onclick="fillCreds('manager', 'manager@2026')">
+                        <div>
+                            <span style="font-weight:700;">manager</span>
+                            <span style="font-size:11px; color:#5C6478; margin-left:8px;">Procurement & POs</span>
+                        </div>
+                        <span class="role-badge-tag role-manager-tag">MANAGER</span>
+                    </button>
+                    <button type="button" class="role-chip-btn" onclick="fillCreds('storekeeper', 'storekeeper@2026')">
+                        <div>
+                            <span style="font-weight:700;">storekeeper</span>
+                            <span style="font-size:11px; color:#5C6478; margin-left:8px;">Stock In / Out Ops</span>
+                        </div>
+                        <span class="role-badge-tag role-store-tag">STORE</span>
+                    </button>
+                </div>
             </div>
-            <button type="submit" class="login-btn">Secure Access</button>
-            <div id="errorMessage" class="err-msg">Authorization failed. Please verify credentials.</div>
-        </form>
-        <div class="footer-text">
-            © 2026 ShadowSync · Kinetic Ledger v7.0<br>
-            Supply Chain Intelligence Platform
         </div>
     </div>
 
+    <!-- Welding Spark Particle Simulation -->
     <script>
+        function fillCreds(u, p) {
+            document.getElementById('username').value = u;
+            document.getElementById('password').value = p;
+        }
+
         document.getElementById('loginForm').addEventListener('submit', async (e) => {
             e.preventDefault();
-            const btn = e.target.querySelector('button');
+            const btn = document.getElementById('loginBtn');
             const err = document.getElementById('errorMessage');
-            btn.textContent = 'Verifying...';
+            btn.textContent = 'Authenticating...';
             btn.disabled = true;
             err.style.display = 'none';
 
@@ -152,17 +609,177 @@
                 });
                 const data = await res.json();
                 if (data.status === 'success') {
-                    localStorage.setItem('ss_token', data.token);
+                    sessionStorage.setItem('ss_token', data.token);
+                    sessionStorage.setItem('ss_user', JSON.stringify({ username: data.username, role: data.role }));
+                    if (data.must_change_password) {
+                        sessionStorage.setItem('must_change_password', 'true');
+                    } else {
+                        sessionStorage.removeItem('must_change_password');
+                    }
                     window.location.href = '/';
                 } else {
                     throw new Error();
                 }
             } catch (e) {
                 err.style.display = 'block';
-                btn.textContent = 'Secure Access';
+                btn.textContent = 'Authorize Session';
                 btn.disabled = false;
             }
         });
+
+        // Interactive Welding Arc Sparks
+        const canvas = document.getElementById('sparkCanvas');
+        const ctx = canvas.getContext('2d');
+        let width = canvas.width = window.innerWidth;
+        let height = canvas.height = window.innerHeight;
+
+        window.addEventListener('resize', () => {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+        });
+
+        const sparks = [];
+        const sparkColors = ['#3DA9FF', '#6AD1FF', '#FF7A1A', '#FFBF00', '#FFFFFF'];
+
+        class Spark {
+            constructor(x, y) {
+                this.x = x !== undefined ? x : Math.random() * width;
+                this.y = y !== undefined ? y : Math.random() * height * 0.4;
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 4 + 1;
+                this.vx = Math.cos(angle) * speed;
+                this.vy = Math.sin(angle) * speed + 1;
+                this.size = Math.random() * 2 + 1;
+                this.alpha = 1;
+                this.decay = Math.random() * 0.02 + 0.008;
+                this.color = sparkColors[Math.floor(Math.random() * sparkColors.length)];
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.vy += 0.08; // Gravity
+                this.alpha -= this.decay;
+            }
+
+            draw() {
+                ctx.save();
+                ctx.globalAlpha = Math.max(0, this.alpha);
+                ctx.fillStyle = this.color;
+                ctx.shadowColor = this.color;
+                ctx.shadowBlur = 8;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        // Periodic arc bursts
+        let burstCooldown = 0;
+        function animate() {
+            ctx.clearRect(0, 0, width, height);
+
+            if (sparks.length < 50 && Math.random() < 0.25) {
+                const originX = width * 0.35 + (Math.random() - 0.5) * 200;
+                const originY = height * 0.3 + (Math.random() - 0.5) * 150;
+                for (let i = 0; i < 5; i++) {
+                    sparks.push(new Spark(originX, originY));
+                }
+            }
+
+            for (let i = sparks.length - 1; i >= 0; i--) {
+                sparks[i].update();
+                sparks[i].draw();
+                if (sparks[i].alpha <= 0) {
+                    sparks.splice(i, 1);
+                }
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+            animate();
+        }
+
+        // 3D Theme Switch Logic for Login Page
+        function initTheme() {
+            const savedTheme = localStorage.getItem('anishka_theme') || 'dark';
+            applyThemeDOM(savedTheme);
+            init3DThemeToggleTilt();
+        }
+
+        function init3DThemeToggleTilt() {
+            const toggle = document.getElementById('themeToggle');
+            if (!toggle) return;
+            if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+            toggle.addEventListener('mousemove', (e) => {
+                const rect = toggle.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                const centerX = rect.width / 2;
+                const centerY = rect.height / 2;
+                const tiltX = ((y - centerY) / centerY) * -12;
+                const tiltY = ((x - centerX) / centerX) * 12;
+                toggle.style.transform = `perspective(200px) rotateX(${tiltX}deg) rotateY(${tiltY}deg) scale(1.02)`;
+            });
+
+            toggle.addEventListener('mouseleave', () => {
+                toggle.style.transform = '';
+            });
+        }
+
+        function toggleTheme(event) {
+            const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+
+            const switchBtn = document.getElementById('themeToggle');
+            if (switchBtn) {
+                switchBtn.classList.remove('rippling');
+                void switchBtn.offsetWidth;
+                switchBtn.classList.add('rippling');
+                setTimeout(() => switchBtn.classList.remove('rippling'), 450);
+            }
+
+            const applyThemeDOM = () => {
+                document.documentElement.setAttribute('data-theme', newTheme);
+                if (switchBtn) {
+                    switchBtn.setAttribute('aria-checked', newTheme === 'light' ? 'true' : 'false');
+                    switchBtn.setAttribute('aria-label', `Toggle theme: currently ${newTheme} mode`);
+                }
+                localStorage.setItem('anishka_theme', newTheme);
+            };
+
+            if (document.startViewTransition && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                const x = event?.clientX ?? window.innerWidth / 2;
+                const y = event?.clientY ?? 0;
+                const endRadius = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
+                const transition = document.startViewTransition(() => {
+                    applyThemeDOM();
+                });
+                transition.ready.then(() => {
+                    document.documentElement.animate(
+                        { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${endRadius}px at ${x}px ${y}px)`] },
+                        { duration: 450, easing: 'cubic-bezier(0.4, 0, 0.2, 1)', pseudoElement: '::view-transition-new(root)' }
+                    );
+                }).catch(() => {});
+            } else {
+                applyThemeDOM();
+            }
+        }
+
+        function applyThemeDOM(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            const switchBtn = document.getElementById('themeToggle');
+            if (switchBtn) {
+                switchBtn.setAttribute('aria-checked', theme === 'light' ? 'true' : 'false');
+                switchBtn.setAttribute('aria-label', `Toggle theme: currently ${theme} mode`);
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', initTheme);
     </script>
 </body>
 </html>
