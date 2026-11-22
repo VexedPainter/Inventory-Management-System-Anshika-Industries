@@ -424,3 +424,11 @@ All 7 reported defects in Anishka Inventory have been resolved and verified with
    - Implemented automated packaging script `make_zip.py` that runs `import app` and the full pytest suite before building.
    - Excludes `.env`, `*.db`, `uploads/`, `__pycache__`, `.pytest_cache`, and backups from the distribution zip.
    - Automated testing suite now at **258 / 258 passing tests** (100% pass rate).
+
+
+### Final Refinements & Cleanups
+- **Frontend Syntax Validation**: Removed duplicated `async` in `static/app.js` and verified with `node --check static/app.js`.
+- **Audit Trail RBAC**: Hidden Audit Trail navigation item (`#nav-item-audit`) for `storekeeper` role, and guarded `fetchAuditTrail()` from calling `/api/audit` unless the role is `admin` or `manager`.
+- **Hardened Health Endpoint (`/api/health`)**: Public requests return minimal telemetry (`{"status": "healthy", "database": "connected", "version": "2.5.0-pilot"}`), completely stripping DB URLs and gating internal system details behind `admin` role authentication.
+- **Packaging Exclusions & Multi-Check Automation**: Updated `make_zip.py` to exclude `_dev_scripts/`, `fix_*.py`, `.env`, `*.db`, `uploads/`, and `__pycache__`, while enforcing automated gates (`import app`, `node --check static/app.js`, `pytest`) prior to archive generation.
+- **Relative Date Seeding**: Seeded sales invoices and payments relative to `datetime.datetime.now()`, ensuring the last 7 days contain at least 4 active invoices and demonstrating positive weekly revenue.

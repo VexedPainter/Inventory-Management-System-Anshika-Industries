@@ -342,7 +342,8 @@ class TestBackupManager:
 class TestHealthAndSecurityHeaders:
 
     def test_api_health_endpoint(self):
-        r = client.get("/api/health")
+        # Admin gets detailed telemetry without DB URL
+        r = client.get("/api/health", headers={"X-User-Role": "admin"})
         assert r.status_code == 200
         data = r.json()
         assert data["status"] in ("healthy", "degraded")
@@ -352,6 +353,13 @@ class TestHealthAndSecurityHeaders:
         assert isinstance(data["database"]["latency_ms"], (int, float))
         assert "scheduler" in data
         assert "security" in data
+        assert "url" not in data["database"], "DB url must never be in health payload"
+
+        # Public caller gets only {status, database, version}
+        r_pub = client.get("/api/health")
+        assert r_pub.status_code == 200
+        data_pub = r_pub.json()
+        assert data_pub == {"status": "healthy", "database": "connected", "version": "2.5.0-pilot"}
 
     def test_enterprise_security_headers_present(self):
         r = client.get("/api/health")

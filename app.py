@@ -1003,16 +1003,35 @@ async def get_service_worker():
     sw_file = os.path.join(os.path.dirname(__file__), "static", "sw.js")
     return FileResponse(sw_file, media_type="application/javascript")
 
-def mask_database_url(url: str) -> str:
-    """Mask password credentials in database connection URL."""
-    if not url:
-        return ""
-    import re
-    return re.sub(r'(://[^:]+:)([^@]+)(@)', r'\1***\3', url)
+def is_admin_request(request: Request) -> bool:
+    """Helper to check if request is authenticated as an admin."""
+    allow_test_role = os.getenv("ALLOW_TEST_ROLE_HEADER", "false").strip().lower() in ("true", "1", "yes")
+    if allow_test_role:
+        test_role = request.headers.get("X-User-Role")
+        if test_role == "admin":
+            return True
+        if test_role:
+            return False
+
+    auth_header = request.headers.get("Authorization", "").strip()
+    token = ""
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+    elif auth_header:
+        token = auth_header
+    if not token:
+        token = request.cookies.get("ss_token", "").strip()
+
+    if token and token in AUTHENTICATED_SESSIONS:
+        session_data = AUTHENTICATED_SESSIONS.get(token)
+        if session_data and session_data.get("role") == "admin":
+            return True
+
+    return False
 
 @app.get("/api/health")
-async def api_health(db: Session = Depends(get_db)):
-    """Enterprise health check endpoint reporting DB connectivity, scheduler, and security status."""
+async def api_health(request: Request, db: Session = Depends(get_db)):
+    """Health check endpoint: public callers get {status, database, version}; admin gets detailed telemetry without DB URL."""
     t_start = time.perf_counter()
     db_ok = False
     dialect_name = "unknown"
@@ -1024,6 +1043,15 @@ async def api_health(db: Session = Depends(get_db)):
         dialect_name = str(e)
     db_latency = round((time.perf_counter() - t_start) * 1000, 2)
 
+    # Public response: only status, database, version (no DB path/URL, no internal details)
+    if not is_admin_request(request):
+        return {
+            "status": "healthy" if db_ok else "degraded",
+            "database": "connected" if db_ok else "error",
+            "version": "2.5.0-pilot"
+        }
+
+    # Admin response: full telemetry, gated behind admin, strictly omitting DB url
     scheduler_jobs = []
     sched_running = False
     try:
@@ -1044,10 +1072,9 @@ async def api_health(db: Session = Depends(get_db)):
         "version": "2.5.0-pilot",
         "timestamp": datetime.datetime.now().isoformat(),
         "database": {
-            "status": "connected" if db_ok else "disconnected",
+            "status": "connected" if db_ok else "error",
             "connected": db_ok,
             "dialect": dialect_name,
-            "url": mask_database_url(DATABASE_URL),
             "latency_ms": db_latency
         },
         "database_connected": db_ok,

@@ -117,6 +117,14 @@ function applyUserUI(user) {
 function applyRBAC(role) {
     const roleNorm = (role || 'storekeeper').toLowerCase();
     document.body.dataset.role = roleNorm;
+    const auditNav = document.getElementById('nav-item-audit');
+    if (auditNav) {
+        auditNav.style.display = (roleNorm === 'admin' || roleNorm === 'manager') ? '' : 'none';
+    }
+    const usersNav = document.getElementById('nav-item-users');
+    if (usersNav) {
+        usersNav.style.display = (roleNorm === 'admin') ? '' : 'none';
+    }
 }
 
 async function apiFetch(url, options = {}) {
@@ -205,7 +213,10 @@ function fetchAllData() {
     fetchMovements();
     fetchProcurement();
     fetchSuppliers();
-    fetchAuditTrail();
+    const currentRole = (state.currentUser?.role || '').toLowerCase();
+    if (currentRole === 'admin' || currentRole === 'manager') {
+        fetchAuditTrail();
+    }
     fetchAutomationStatus();
     fetchCustomers();
     fetchSalesOrders();
@@ -2737,6 +2748,8 @@ function exportCSV(type) {
 //  AUDIT TRAIL TAB
 // ==============================================
 async function fetchAuditTrail() {
+    const role = (state.currentUser?.role || '').toLowerCase();
+    if (role !== 'admin' && role !== 'manager') return;
     try {
         const logs = await apiFetch('/api/audit');
         const tbody = document.getElementById('audit-table-body');
@@ -8393,7 +8406,7 @@ function selectPricingTier(tierId, price) {
     }
 }
 
-async async function computeUnitEconomics() {
+async function computeUnitEconomics() {
     const price = parseFloat(document.getElementById('ue_price')?.value || 9999);
     const hosting = parseFloat(document.getElementById('ue_hosting')?.value || 0);
     const llm = parseFloat(document.getElementById('ue_llm')?.value || 0);
@@ -8477,6 +8490,11 @@ async async function computeUnitEconomics() {
         const usersNav = document.getElementById('nav-item-users');
         if (usersNav) {
             usersNav.style.display = (roleNorm === 'admin') ? '' : 'none';
+        }
+        // Hide Audit Trail nav for storekeeper (admin and manager only)
+        const auditNav = document.getElementById('nav-item-audit');
+        if (auditNav) {
+            auditNav.style.display = (roleNorm === 'admin' || roleNorm === 'manager') ? '' : 'none';
         }
     };
 })();

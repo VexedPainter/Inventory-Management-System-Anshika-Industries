@@ -439,15 +439,20 @@ def test_11_invoices_have_nonzero_totals():
 
 
 def test_12_health_reports_db_connectivity():
-    """Defect 5: /api/health must report database_connected=True and masked url."""
-    res = client.get("/api/health", headers=ADMIN_HEADERS)
-    assert res.status_code == 200
-    data = res.json()
-    assert data.get("database_connected") is True, "/api/health did not report DB connected"
-    assert "url" in data.get("database", {}), f"/api/health missing database.url; got keys: {list(data.keys())}"
-    db_url = data["database"]["url"]
-    # Must not expose plain-text passwords
-    assert "***" not in db_url or "://" in db_url or "sqlite" in db_url, (
-        "Unexpected health URL format"
-    )
-    print(f"  [OK] test_12: health OK, db_url={db_url}, connected={data['database_connected']}")
+    """Item 3: /api/health must report DB connectivity and never expose DB url."""
+    # Admin call
+    res_admin = client.get("/api/health", headers=ADMIN_HEADERS)
+    assert res_admin.status_code == 200
+    data_admin = res_admin.json()
+    assert data_admin.get("database_connected") is True or data_admin.get("database", {}).get("connected") is True
+    assert "url" not in str(data_admin), "Database URL must never be exposed in health check"
+
+    # Public call
+    res_pub = client.get("/api/health")
+    assert res_pub.status_code == 200
+    data_pub = res_pub.json()
+    assert data_pub.get("status") in ("healthy", "degraded")
+    assert data_pub.get("database") in ("connected", "error")
+    assert "version" in data_pub
+    assert "facility" not in data_pub, "Internal details must be gated behind admin"
+    print(f"  [OK] test_12: health OK, admin and public contract verified")

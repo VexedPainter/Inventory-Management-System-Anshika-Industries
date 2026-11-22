@@ -1427,7 +1427,13 @@ def seed_database(db: Session = None):
         (38, 4, "INVOICED", [("TIG-TE-WL15-24", 100, 130.0, 0.0), ("TIG-GC-06", 60, 48.0, 0.0)], False, 0),
         # Unpaid in 0 - 30 Days Bucket (10 - 25 days ago)
         (22, 6, "INVOICED", [("ROB-NZ-CL50", 10, 2200.0, 5.0), ("ROB-RC-16", 6, 4200.0, 0.0)], False, 0),
-        (12, 0, "INVOICED", [("MIG-CT-M6-10", 250, 40.0, 0.0), ("MIG-DF-24KD", 60, 72.0, 0.0)], False, 0),
+        (12, 0, "INVOICED", [("MIG-CT-M6-10", 250, 40.0, 0.0), ("MIG-DF-24KD", 60, 72.0, 0.0)], True, 3),
+        (9, 2, "INVOICED", [("ROB-SN-45", 3, 8200.0, 5.0), ("ROB-CT-AG12", 40, 240.0, 0.0)], True, 2),
+        # Recent Invoices in Last 7 Days (Days 1, 2, 4, 6 - at least 4 invoices in the last 7 days)
+        (6, 5, "INVOICED", [("WIR-MIG-70S-12", 80, 185.0, 5.0), ("MIG-LN-ST12", 15, 320.0, 0.0)], True, 2),
+        (4, 7, "INVOICED", [("ROB-CD-ROB", 4, 7500.0, 0.0), ("ROB-PI-500", 8, 1850.0, 0.0)], False, 0),
+        (2, 3, "INVOICED", [("MIG-CT-M8-10", 120, 52.0, 0.0), ("MIG-NZ-CON36", 25, 225.0, 0.0)], True, 1),
+        (1, 1, "INVOICED", [("WIR-MIG-70S-08", 120, 175.0, 5.0), ("MIG-DF-24KD", 40, 72.0, 0.0)], True, 0),
         # Recently Dispatched Order
         (6, 3, "DISPATCHED", [("WIR-SS-308L-12", 30, 420.0, 0.0), ("MIG-LN-TF12", 15, 680.0, 0.0)], False, 0),
         # Confirmed Active Orders (Stock Reserved)
