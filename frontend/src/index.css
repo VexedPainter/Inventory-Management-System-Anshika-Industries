@@ -1,0 +1,149 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --canvas: #E9E7E1;
+    --card: #FFFFFF;
+    --ink: #141414;
+    --muted: #8B8B86;
+    --hairline: rgba(0, 0, 0, 0.06);
+    --sage: #5F7F6D;
+  }
+
+  .dark {
+    --canvas: #0F1110;
+    --card: #181B1A;
+    --ink: #F5F5F3;
+    --muted: #8B8B86;
+    --hairline: rgba(255, 255, 255, 0.08);
+    --sage: #5F7F6D;
+  }
+
+  * {
+    border-color: var(--hairline);
+  }
+
+  body {
+    background-color: var(--canvas);
+    color: var(--ink);
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    letter-spacing: -0.01em;
+  }
+}
+
+/* Diagonal skeleton shimmer */
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.animate-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.animate-shimmer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  background: linear-gradient(
+    110deg,
+    transparent 20%,
+    rgba(255, 255, 255, 0.45) 50%,
+    transparent 80%
+  );
+  animation: shimmer 1.8s infinite ease-in-out;
+}
+
+.dark .animate-shimmer::after {
+  background: linear-gradient(
+    110deg,
+    transparent 20%,
+    rgba(255, 255, 255, 0.06) 50%,
+    transparent 80%
+  );
+}
+
+/* Button light sweep on hover */
+.sweep-hover {
+  position: relative;
+  overflow: hidden;
+}
+
+.sweep-hover::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -75%;
+  width: 50%;
+  height: 100%;
+  background: linear-gradient(
+    120deg,
+    transparent,
+    rgba(255, 255, 255, 0.28),
+    transparent
+  );
+  transform: skewX(-25deg);
+  transition: all 0.75s ease;
+  pointer-events: none;
+}
+
+.sweep-hover:hover::before {
+  left: 125%;
+}
+
+/* AI Orb Pulsing and Glowing Keyframes */
+@keyframes orb-float {
+  0%, 100% {
+    transform: translateY(0px) scale(1);
+    filter: drop-shadow(0 0 20px rgba(106, 91, 255, 0.6)) drop-shadow(0 0 40px rgba(143, 227, 255, 0.4));
+  }
+  50% {
+    transform: translateY(-6px) scale(1.03);
+    filter: drop-shadow(0 0 25px rgba(106, 91, 255, 0.75)) drop-shadow(0 0 50px rgba(143, 227, 255, 0.5));
+  }
+}
+
+.animate-orb {
+  animation: orb-float 4s ease-in-out infinite;
+}
+
+/* Reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .animate-orb,
+  .animate-shimmer::after,
+  .sweep-hover::before {
+    animation: none !important;
+    display: none !important;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 9999px;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+}
