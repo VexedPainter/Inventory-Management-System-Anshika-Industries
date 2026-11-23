@@ -35,6 +35,8 @@ export const AiCopilotPageView: React.FC = () => {
     },
   ]);
   const [isLoading, setIsLoading] = useState(false);
+  const [aiMode, setAiMode] = useState<'live' | 'offline' | null>(null);
+  const [aiReason, setAiReason] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Fetch AI token usage & model health
@@ -49,6 +51,10 @@ export const AiCopilotPageView: React.FC = () => {
     queryFn: () => apiFetch('/api/ai/health'),
     staleTime: 60000,
   });
+
+  // Sync initial mode from health endpoint if not set by chat response yet
+  const effectiveMode = aiMode ?? (healthData?.status === 'connected' ? 'live' : 'offline');
+  const effectiveReason = aiReason ?? (healthData?.status === 'connected' ? null : (healthData?.message || healthData?.error_detail || 'Rule-based fallback active'));
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -78,6 +84,11 @@ export const AiCopilotPageView: React.FC = () => {
           stream: false,
         },
       });
+
+      if (res.mode) {
+        setAiMode(res.mode);
+        setAiReason(res.reason || null);
+      }
 
       const reply = res.response || res.narrative || res.reply || 'Analysis complete.';
       setMessages(prev => [
@@ -141,7 +152,26 @@ export const AiCopilotPageView: React.FC = () => {
               <h3 className="text-sm font-bold text-ink-light dark:text-ink-dark">
                 Ani Enterprise Copilot
               </h3>
-              <p className="text-[11px] text-muted">Direct tool integration into PostgreSQL / SQLite</p>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                {effectiveMode === 'live' ? (
+                  <span
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 cursor-default"
+                    title="Live AI model (Groq LLM) active"
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    Live AI
+                  </span>
+                ) : (
+                  <span
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 cursor-help"
+                    title={effectiveReason || 'Rule-based fallback active'}
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                    Offline mode (rule-based)
+                  </span>
+                )}
+                <span className="text-[10px] text-muted">• Direct tool integration</span>
+              </div>
             </div>
           </div>
           <span className="font-mono text-xs text-sage bg-sage/10 px-2.5 py-1 rounded-full font-semibold">
@@ -258,6 +288,15 @@ export const AiCopilotPageView: React.FC = () => {
           </div>
 
           <div className="space-y-2 text-xs">
+            <div className="flex justify-between py-1 border-b border-hairline-light dark:border-hairline-dark">
+              <span className="text-muted">Engine Mode</span>
+              <span
+                className={`font-semibold ${effectiveMode === 'live' ? 'text-positive' : 'text-amber-500'} cursor-help`}
+                title={effectiveReason || 'Ready'}
+              >
+                {effectiveMode === 'live' ? 'Live AI' : 'Offline (rule-based)'}
+              </span>
+            </div>
             <div className="flex justify-between py-1 border-b border-hairline-light dark:border-hairline-dark">
               <span className="text-muted">Model</span>
               <span className="font-mono font-semibold text-sage">

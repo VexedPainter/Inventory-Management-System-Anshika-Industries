@@ -15,7 +15,8 @@ import {
   Download,
   AlertCircle,
   Activity,
-  Layers
+  Layers,
+  Sparkles
 } from 'lucide-react';
 import { apiFetch } from '../api/client';
 import { useAuth } from '../context/AuthContext';
@@ -55,6 +56,15 @@ export const SettingsView: React.FC = () => {
     queryFn: async () => {
       return await apiFetch('/api/simulator/status');
     },
+  });
+
+  // 4. AI Engine Health Query
+  const { data: aiHealth, refetch: refetchAiHealth, isFetching: isFetchingAiHealth } = useQuery({
+    queryKey: ['settings-ai-health'],
+    queryFn: async () => {
+      return await apiFetch('/api/ai/health');
+    },
+    staleTime: 15000,
   });
 
   // Automation update mutation
@@ -387,6 +397,74 @@ export const SettingsView: React.FC = () => {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+
+        {/* 5. AI Engine & Copilot Health */}
+        <div className="bg-white dark:bg-[#181B1A] rounded-3xl p-6 border border-black/5 dark:border-white/5 shadow-sm space-y-5 md:col-span-2">
+          <div className="flex items-center justify-between border-b border-black/5 dark:border-white/5 pb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-emerald-500/10 flex items-center justify-center text-emerald-600">
+                <Sparkles className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-ink dark:text-white">AI Copilot System Health</h3>
+                <p className="text-xs text-muted">Groq LLM connectivity & tool agent diagnostics</p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <span
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${
+                  aiHealth?.status === 'connected'
+                    ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
+                    : 'bg-amber-500/10 text-amber-600 border border-amber-500/20'
+                }`}
+              >
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    aiHealth?.status === 'connected' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+                  }`}
+                />
+                {aiHealth?.status === 'connected' ? 'Connected (Live AI)' : 'Offline (Rule-based)'}
+              </span>
+
+              <button
+                onClick={() => refetchAiHealth()}
+                disabled={isFetchingAiHealth}
+                className="p-1.5 rounded-full hover:bg-black/5 dark:hover:bg-white/5 text-muted hover:text-ink dark:hover:text-white transition-colors"
+                title="Test AI Connectivity"
+              >
+                <RefreshCw className={`w-4 h-4 ${isFetchingAiHealth ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+            <div className="p-3 rounded-2xl bg-black/5 dark:bg-white/5 space-y-1">
+              <span className="text-muted">Configured Model</span>
+              <p className="font-mono font-semibold text-ink dark:text-white truncate">
+                {aiHealth?.configured_model || 'llama-3.3-70b-versatile'}
+              </p>
+            </div>
+            <div className="p-3 rounded-2xl bg-black/5 dark:bg-white/5 space-y-1">
+              <span className="text-muted">Model Validation</span>
+              <p className={`font-semibold ${aiHealth?.is_model_valid ? 'text-positive' : 'text-amber-500'}`}>
+                {aiHealth?.is_model_valid ? 'Verified on Provider' : 'Local Fallback'}
+              </p>
+            </div>
+            <div className="p-3 rounded-2xl bg-black/5 dark:bg-white/5 space-y-1">
+              <span className="text-muted">Operational State</span>
+              <p className="font-semibold text-ink dark:text-white truncate">
+                {aiHealth?.status === 'connected' ? 'Live Tool-Calling Enabled' : 'Intelligent Rule Engine'}
+              </p>
+            </div>
+          </div>
+
+          <div className="pt-1">
+            <p className="text-xs text-muted">
+              {aiHealth?.message || aiHealth?.error_detail || 'Grounded inventory agent operational.'}
+            </p>
           </div>
         </div>
       </div>

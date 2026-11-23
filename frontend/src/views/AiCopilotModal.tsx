@@ -30,8 +30,29 @@ export const AiCopilotModal: React.FC<AiCopilotModalProps> = ({
     },
   ]);
   const [isLoading, setIsLoading] = useState(false);
+  const [aiMode, setAiMode] = useState<'live' | 'offline' | null>(null);
+  const [aiReason, setAiReason] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const shouldReduceMotion = useReducedMotion();
+
+  useEffect(() => {
+    if (isOpen && aiMode === null) {
+      apiFetch('/api/ai/health')
+        .then((res: any) => {
+          if (res?.status === 'connected') {
+            setAiMode('live');
+            setAiReason(null);
+          } else {
+            setAiMode('offline');
+            setAiReason(res?.error_detail || res?.message || 'Rule-based engine active');
+          }
+        })
+        .catch(() => {
+          setAiMode('offline');
+          setAiReason('Health check unreachable');
+        });
+    }
+  }, [isOpen, aiMode]);
 
   useEffect(() => {
     if (initialQuery && isOpen) {
@@ -61,8 +82,13 @@ export const AiCopilotModal: React.FC<AiCopilotModalProps> = ({
     try {
       const res = await apiFetch('/api/ai/chat', {
         method: 'POST',
-        body: { query: text, language: 'en' },
+        body: { message: text, query: text, language: 'en' },
       });
+
+      if (res?.mode) {
+        setAiMode(res.mode);
+        setAiReason(res.reason || null);
+      }
 
       const replyContent = res.reply || res.response || res.answer || JSON.stringify(res);
       setMessages(prev => [
@@ -117,7 +143,26 @@ export const AiCopilotModal: React.FC<AiCopilotModalProps> = ({
                   <h3 className="text-base font-semibold text-ink-light dark:text-ink-dark">
                     Ani AI Copilot
                   </h3>
-                  <p className="text-xs text-muted">Intelligent warehouse assistant</p>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    {aiMode === 'live' ? (
+                      <span
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 cursor-default"
+                        title="Live AI model (Groq LLM) active"
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        Live AI
+                      </span>
+                    ) : (
+                      <span
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 cursor-help"
+                        title={aiReason || 'Rule-based fallback active'}
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                        Offline mode (rule-based)
+                      </span>
+                    )}
+                    <span className="text-xs text-muted">• Warehouse assistant</span>
+                  </div>
                 </div>
               </div>
               <motion.button

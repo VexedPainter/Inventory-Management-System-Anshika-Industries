@@ -397,13 +397,17 @@ def execute_get_low_stock(db: Session) -> dict:
         avail = (it.quantity or 0) - (getattr(it, "reserved_qty", 0) or 0)
         if s in ("OUT", "CRITICAL", "LOW") or avail <= it.reorder_level:
             low_list.append({
+                "id": it.id,
                 "sku": it.sku,
                 "name": it.name,
                 "category": it.category,
+                "unit": getattr(it, "unit", "units") or "units",
                 "quantity_on_hand": it.quantity,
                 "available_quantity": avail,
                 "reorder_level": it.reorder_level,
                 "reorder_qty": it.reorder_qty,
+                "unit_cost": getattr(it, "unit_cost", 100.0) or 100.0,
+                "supplier_id": getattr(it, "supplier_id", 1) or 1,
                 "status": s,
                 "supplier": it.supplier.name if it.supplier else "Authorized OEM",
                 "has_open_po": it.sku in items_on_po
@@ -852,6 +856,22 @@ def execute_tool(tool_name: str, args: dict, db: Session) -> dict:
 
 # ─── Model Health Check ──────────────────────────────────────────────
 
+def classify_groq_error(e: Exception) -> str:
+    """Classify Groq exception into human-readable reason string."""
+    err_str = str(e).lower()
+    if any(k in err_str for k in ["invalid_api_key", "invalid api key", "authentication", "unauthorized", "401"]):
+        return "invalid API key"
+    if any(k in err_str for k in ["model_not_found", "model not found", "does not exist", "cannot find model", "404"]):
+        return "model not found"
+    if any(k in err_str for k in ["rate_limit", "rate limit", "too many requests", "429"]):
+        return "rate limited"
+    if any(k in err_str for k in ["quota", "insufficient_quota", "credit"]):
+        return "quota exceeded"
+    if any(k in err_str for k in ["timeout", "timed out", "connection", "connecterror", "connection refused"]):
+        return "connection error"
+    return f"error: {str(e)[:80]}"
+
+
 def check_ai_health() -> dict:
     """Verify Groq API connectivity, validate model configuration, and return available models."""
     configured_model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
@@ -911,7 +931,7 @@ def check_ai_health() -> dict:
 
 # ─── Intelligent Grounded Fallback Agent ────────────────────────────
 
-def run_fallback_agent(user_message: str, db: Session, user: str = "storekeeper") -> dict:
+def _run_fallback_agent_impl(user_message: str, db: Session, user: str = "storekeeper") -> dict:
     """
     Intelligent tool-backed rule engine executed when GROQ_API_KEY is not configured.
     Interprets user intent, executes actual tools against the database, grounds claims
@@ -924,7 +944,214 @@ def run_fallback_agent(user_message: str, db: Session, user: str = "storekeeper"
 
     # Detect language: Hindi script vs Hinglish vs English
     is_hindi_script = bool(re.search(r'[\u0900-\u097F]', user_message))
-    is_hinglish = any(w in q for w in ["karo", "kitna", "batao", "kaunsa", "kaunse", "kiska", "hain", "chahiye", "dikhao", "mein", "pe"])
+    is_hinglish = any(w in q for w in [
+        "karo", "kitna", "batao", "kaunsa", "kaunse", "kiska", "hain",
+        "chahiye", "dikhao", "mein", "pe", "hai", "bacha", "kaise",
+        "baki", "dene", "karna", "hafte", "is hafte", "paise",
+        "order", "stock", "nahi", "zyada", "kab", "kya", "kyun",
+        "mangao", "udhaar", "khapat", "kitne"
+    ])
+
+    # 0-H. HINGLISH / HINDI intent shortcuts (checked before English handlers)
+
+    # H-b: "stock order karna hai / kaise kare / reorder karo" → reorder guidance (low-stock list + draft PO proposal)
+    if any(k in q for k in ["order karna", "order kaise", "kaise kare", "stock order", "reorder karna", "reorder karo", "purchase karna", "maal mangao", "maal order"]):
+        data = execute_get_low_stock(db)
+        tool_calls.append({"tool": "get_low_stock", "args": {}})
+        items = data.get("items", [])
+        if items:
+            top_item = items[0]
+            reorder_qty = top_item.get("suggested_reorder_level") or max(50, top_item.get("reorder_level", 20) * 2)
+            proposed_action = {
+                "action_type": "create_draft_po",
+                "endpoint": "/api/procurement/orders",
+                "method": "POST",
+                "payload": {
+                    "vendor_id": top_item.get("supplier_id") or 1,
+                    "items": [{
+                        "item_id": top_item.get("id", 1),
+                        "quantity": reorder_qty,
+                        "unit_cost": top_item.get("unit_cost", 100.0)
+                    }],
+                    "notes": f"Reorder draft via AI Copilot for {top_item['sku']}"
+                },
+                "summary": f"Create Draft PO for {top_item['name']} ({top_item['sku']}) — Qty: {reorder_qty}"
+            }
+            if is_hindi_script:
+                lines = ["**स्टॉक रीऑर्डर मार्गदर्शन (Reorder Guidance):**\n", "ये आइटम्स अभी कम हैं, इनके लिए PO बनाना चाहिए:\n"]
+                for it in items[:5]:
+                    lines.append(f"- **{it['name']}** (`{it['sku']}`): स्टॉक **{it['quantity_on_hand']} {it.get('unit', 'units')}** (रीऑर्डर सीमा: {it['reorder_level']})")
+                lines.append(f"\nमैंने सबसे मुख्य आइटम `{top_item['sku']}` के लिए ड्राफ्ट PO तैयार किया है। पुष्टि के लिए नीचे कार्ड देखें।")
+            elif is_hinglish:
+                lines = ["**Stock Reorder Guidance:**\n", "Yeh items abhi low hain jinhe reorder karna chahiye:\n"]
+                for it in items[:5]:
+                    lines.append(f"- **{it['name']}** (`{it['sku']}`): Stock **{it['quantity_on_hand']} {it.get('unit', 'units')}** (Reorder level: {it['reorder_level']})")
+                lines.append(f"\nMaine sabse critical item `{top_item['sku']}` ke liye draft PO proposal create kar diya hai. Niche card mein approve kar sakte hain.")
+            else:
+                lines = ["**Reorder Guidance (Low Stock & Draft PO):**\n", "The following items require replenishment:\n"]
+                for it in items[:5]:
+                    lines.append(f"- **{it['name']}** (`{it['sku']}`): Available **{it['quantity_on_hand']} {it.get('unit', 'units')}** (Reorder threshold: {it['reorder_level']})")
+                lines.append(f"\nI have prepared a draft PO proposal for `{top_item['sku']}`. Please review below.")
+            narrative = "\n".join(lines)
+        else:
+            if is_hindi_script:
+                narrative = "सभी आइटम्स का स्टॉक पर्याप्त है। अभी किसी नए PO की आवश्यकता नहीं है।"
+            elif is_hinglish:
+                narrative = "Abhi sab items ka stock sufficient hai. Kisi naye PO ki zaroorat nahi hai."
+            else:
+                narrative = "All inventory items are currently above reorder thresholds. No replenishment POs needed."
+        return {"response": narrative, "model": "grounded-fallback-agent", "tokens_used": 90, "tool_calls": tool_calls, "proposed_action": proposed_action, "status": "success", "mode": "offline"}
+
+    # H-a: "kitna stock / kitna bacha" → item search or low stock
+    if any(k in q for k in ["kitna stock", "kitna bacha", "stock kitna", "stock kya hai", "bacha hai", "kitne bache", "stock check karo", "stock dikhao"]):
+        # Check if an explicit SKU is in query
+        sku_match = re.search(r'([A-Za-z]{2,4}-[A-Za-z0-9]+-[A-Za-z0-9\-]+)', user_message)
+        if sku_match:
+            sku = sku_match.group(1).upper()
+            data = execute_get_item(db, sku)
+            tool_calls.append({"tool": "get_item", "args": {"sku": sku}})
+            if data.get("found"):
+                if is_hindi_script:
+                    narrative = f"`{sku}` ({data['name']}) का उपलब्ध स्टॉक **{data['quantity_on_hand']} {data['unit']}** है (लोकेशन: `{data['location']}`)।"
+                elif is_hinglish:
+                    narrative = f"`{sku}` ({data['name']}) ka available stock **{data['quantity_on_hand']} {data['unit']}** hai bin `{data['location']}` mein."
+                else:
+                    narrative = f"Current stock for `{sku}` ({data['name']}) is **{data['quantity_on_hand']} {data['unit']}** (Location: `{data['location']}`)."
+                return {"response": narrative, "model": "grounded-fallback-agent", "tokens_used": 75, "tool_calls": tool_calls, "proposed_action": None, "status": "success", "mode": "offline"}
+        # If specific component candidate mentioned
+        for candidate in ["contact tip", "swan neck", "nozzle", "liner", "diffuser", "torch", "wire"]:
+            if candidate in q:
+                data = execute_search_items(db, candidate)
+                tool_calls.append({"tool": "search_items", "args": {"query": candidate}})
+                items = data.get("items", [])
+                if items:
+                    if is_hindi_script:
+                        lines = [f"**'{candidate}' के लिए वेयरहाउस स्टॉक:**\n"]
+                        for it in items[:4]:
+                            lines.append(f"- **{it['name']}** (`{it['sku']}`): उपलब्ध **{it['available_quantity']} यूनिट्स** (लोकेशन: `{it['location']}`)")
+                    elif is_hinglish:
+                        lines = [f"**'{candidate}' ke matching parts ka stock:**\n"]
+                        for it in items[:4]:
+                            lines.append(f"- **{it['name']}** (`{it['sku']}`): Available **{it['available_quantity']} units** in `{it['location']}`")
+                    else:
+                        lines = [f"**Stock status for '{candidate}':**\n"]
+                        for it in items[:4]:
+                            lines.append(f"- **{it['name']}** (`{it['sku']}`): Available **{it['available_quantity']} units** in `{it['location']}`")
+                    return {"response": "\n".join(lines), "model": "grounded-fallback-agent", "tokens_used": 80, "tool_calls": tool_calls, "proposed_action": None, "status": "success", "mode": "offline"}
+        # General low-stock list
+        data = execute_get_low_stock(db)
+        tool_calls.append({"tool": "get_low_stock", "args": {}})
+        items = data.get("items", [])
+        if items:
+            if is_hindi_script:
+                lines = ["**कम स्टॉक वाले मुख्य आइटम्स:**\n"]
+                for it in items[:5]:
+                    lines.append(f"- **{it['name']}** (`{it['sku']}`): सिर्फ **{it['quantity_on_hand']} {it.get('unit', 'units')}** बचा है (रीऑर्डर सीमा: {it['reorder_level']})")
+            elif is_hinglish:
+                lines = ["**Warehouse Stock Status — Low items:**\n"]
+                for it in items[:5]:
+                    lines.append(f"- **{it['name']}** (`{it['sku']}`): Sirf **{it['quantity_on_hand']} {it.get('unit', 'units')}** bacha hai (Reorder: {it['reorder_level']})")
+            else:
+                lines = ["**Warehouse Stock Status (Low / Critical items):**\n"]
+                for it in items[:5]:
+                    lines.append(f"- **{it['name']}** (`{it['sku']}`): Only **{it['quantity_on_hand']} {it.get('unit', 'units')}** remaining (Reorder: {it['reorder_level']})")
+            narrative = "\n".join(lines)
+        else:
+            narrative = "Sabhi items ka stock theek hai, koi shortage nahi hai." if is_hinglish else "All items are in healthy stock."
+        return {"response": narrative, "model": "grounded-fallback-agent", "tokens_used": 75, "tool_calls": tool_calls, "proposed_action": None, "status": "success", "mode": "offline"}
+
+    # H-c: "kisne paise dene hain / baki" → receivables
+    if any(k in q for k in ["kisne paise", "paise dene", "baki hai", "baki hain", "udhaar", "outstanding", "kaun dega", "receivable"]):
+        data = execute_get_receivables(db)
+        tool_calls.append({"tool": "get_receivables", "args": {}})
+        debtors = data.get("customers", [])
+        if debtors:
+            if is_hindi_script:
+                lines = ["**बकाया राशि (Accounts Receivable):**\n"]
+                for c in debtors[:5]:
+                    overdue = " ⚠️ अतिदेय (OVERDUE)" if c.get("is_overdue") else ""
+                    lines.append(f"- **{c['name']}**: ₹{c['outstanding_amount']:,.2f} बकाया ({c['days_overdue']} दिन){overdue}")
+            elif is_hinglish:
+                lines = ["**Accounts Receivable — jinpe paise baki hain:**\n"]
+                for c in debtors[:5]:
+                    overdue = " ⚠️ OVERDUE" if c.get("is_overdue") else ""
+                    lines.append(f"- **{c['name']}**: ₹{c['outstanding_amount']:,.2f} baki hai ({c['days_overdue']} din overdue){overdue}")
+            else:
+                lines = ["**Outstanding Accounts Receivable:**\n"]
+                for c in debtors[:5]:
+                    overdue = " ⚠️ OVERDUE" if c.get("is_overdue") else ""
+                    lines.append(f"- **{c['name']}**: ₹{c['outstanding_amount']:,.2f} outstanding ({c['days_overdue']} days overdue){overdue}")
+            narrative = "\n".join(lines)
+        else:
+            narrative = "किसी ग्राहक का भुगतान बकाया नहीं है।" if is_hindi_script else ("Koi payment overdue nahi hai. Sab clear hai." if is_hinglish else "No overdue customer accounts found.")
+        return {"response": narrative, "model": "grounded-fallback-agent", "tokens_used": 85, "tool_calls": tool_calls, "proposed_action": None, "status": "success", "mode": "offline"}
+
+    # H-d: "is hafte ka summary / weekly summary / hafte mein kya hua" → owner summary
+    if any(k in q for k in ["is hafte", "hafte ka", "hafte mein", "weekly summary", "is week", "week ka", "aaj ka summary"]):
+        try:
+            summary = execute_owner_summary(db)
+            tool_calls.append({"tool": "owner_summary", "args": {}})
+            metrics = summary.get("metrics", {})
+            sales = metrics.get("sales", {})
+            rec = metrics.get("receivables", {})
+            rev = sales.get('total_revenue', 0)
+            invoices = sales.get('invoice_count', 0)
+            overdue_val = rec.get('total_overdue_value', 0)
+            if is_hindi_script:
+                lines = [
+                    "**साप्ताहिक व्यापार सारांश (Weekly Business Summary):**\n",
+                    f"- **कुल बिक्री (Sales Revenue)**: ₹{rev:,.2f}",
+                    f"- **कुल इनवॉइस संख्या**: {invoices}",
+                    f"- **अतिदेय प्राप्य (Overdue Receivables)**: ₹{overdue_val:,.2f}"
+                ]
+            elif is_hinglish:
+                lines = [
+                    "**Is Hafte ka Business Summary:**\n",
+                    f"- **Total Sales Revenue**: ₹{rev:,.2f}",
+                    f"- **Total Invoices**: {invoices}",
+                    f"- **Outstanding Receivables**: ₹{overdue_val:,.2f}"
+                ]
+            else:
+                lines = [
+                    "**Weekly Executive Business Summary:**\n",
+                    f"- **Total Sales Revenue**: ₹{rev:,.2f}",
+                    f"- **Total Invoices Generated**: {invoices}",
+                    f"- **Outstanding Receivables**: ₹{overdue_val:,.2f}"
+                ]
+            narrative = "\n".join(lines)
+        except Exception:
+            narrative = "Summary abhi available nahi hai. Thodi der baad try karo."
+        return {"response": narrative, "model": "grounded-fallback-agent", "tokens_used": 90, "tool_calls": tool_calls, "proposed_action": None, "status": "success", "mode": "offline"}
+
+    # H-e: "trend / velocity / movement / kitna chala / consumption" → movement trend
+    if any(k in q for k in ["trend", "velocity", "movement", "kitna chala", "kitni khapat", "consumption trend", "turnover", "stock movement"]):
+        data = compute_business_kpis(db)
+        tool_calls.append({"tool": "business_kpis", "args": {}})
+        turnover = data.get("inventory_turnover", 0.0)
+        days = data.get("days_of_inventory", 0.0)
+        fill_rate = data.get("fill_rate_pct", 0.0)
+        if is_hindi_script:
+            narrative = (
+                f"**स्टॉक मूवमेंट और वेलोसिटी विश्लेषण (Movement Trend & Turnover):**\n\n"
+                f"- **इन्वेंट्री टर्नओवर**: **{turnover:.2f}x** प्रति वर्ष\n"
+                f"- **औसत स्टॉक दिन (DSI)**: **{days:.0f} दिन** का स्टॉक उपलब्ध है\n"
+                f"- **ऑर्डर पूर्ति दर (Fill Rate)**: **{fill_rate:.1f}%**"
+            )
+        elif is_hinglish:
+            narrative = (
+                f"**Stock Velocity / Movement Trend Summary:**\n\n"
+                f"- **Inventory Turnover**: **{turnover:.2f}x** per saal — matlab stock {turnover:.1f} baar replace ho raha hai\n"
+                f"- **Days of Inventory (DSI)**: **{days:.0f} din** ka stock available hai average pe\n"
+                f"- **Order Fill Rate**: **{fill_rate:.1f}%**"
+            )
+        else:
+            narrative = (
+                f"**Stock Movement & Velocity Trend Summary:**\n\n"
+                f"- **Inventory Turnover**: **{turnover:.2f}x** per annum\n"
+                f"- **Days of Stock (DSI)**: **{days:.0f} days** average cover\n"
+                f"- **Order Fill Rate**: **{fill_rate:.1f}%**"
+            )
+        return {"response": narrative, "model": "grounded-fallback-agent", "tokens_used": 85, "tool_calls": tool_calls, "proposed_action": None, "status": "success", "mode": "offline"}
 
     # 1. WRITE: Stock out request
     stock_out_match = re.search(r'(?:issue|stock\s*out|deduct|remove|nikalo|nikaal)\s+(\d+)\s*(?:pcs|units|pieces|of|\s+)*(?:of\s+)?([a-zA-Z0-9\-_]+)', user_message, re.IGNORECASE)
@@ -1300,6 +1527,15 @@ def run_fallback_agent(user_message: str, db: Session, user: str = "storekeeper"
     }
 
 
+def run_fallback_agent(user_message: str, db: Session, user: str = "storekeeper") -> dict:
+    """Intelligent tool-backed rule engine executed when GROQ_API_KEY is not configured or offline."""
+    res = _run_fallback_agent_impl(user_message, db, user=user)
+    if isinstance(res, dict):
+        res.setdefault("mode", "offline")
+        res.setdefault("reason", "rule-based fallback")
+    return res
+
+
 # ─── Groq Tool-Calling Agent Loop ───────────────────────────────────
 
 def run_chat_agent(
@@ -1323,6 +1559,8 @@ def run_chat_agent(
 
     if not api_key:
         result = run_fallback_agent(user_message, db, user=user)
+        result["mode"] = "offline"
+        result["reason"] = "GROQ_API_KEY is not configured in .env"
         latency = int((time.time() - start_time) * 1000)
         _log_ai_interaction(db, user, role, result.get("model", "grounded-fallback-agent"), 50, result.get("tokens_used", 50), result.get("tool_calls", []), latency)
         return result
@@ -1421,12 +1659,17 @@ def run_chat_agent(
             "tokens_used": total_tokens,
             "tool_calls": tool_calls_executed,
             "proposed_action": proposed_action,
-            "status": "success"
+            "status": "success",
+            "mode": "live",
+            "reason": None
         }
 
     except Exception as e:
-        logger.warning(f"[Groq Agent] Falling back due to exception: {e}")
+        reason = classify_groq_error(e)
+        logger.warning(f"[Groq Agent] Falling back due to exception ({reason}): {e}")
         result = run_fallback_agent(user_message, db, user=user)
+        result["mode"] = "offline"
+        result["reason"] = reason
         latency = int((time.time() - start_time) * 1000)
         _log_ai_interaction(db, user, role, "grounded-fallback-agent", 50, result.get("tokens_used", 50), result.get("tool_calls", []), latency)
         return result
@@ -1475,7 +1718,7 @@ async def stream_chat_agent(
 
         latency = int((time.time() - start_time) * 1000)
         _log_ai_interaction(db, user, role, "grounded-fallback-agent", 50, res.get("tokens_used", 50), res.get("tool_calls", []), latency)
-        yield f"data: {json.dumps({'type': 'done', 'tokens_used': res.get('tokens_used', 50), 'model': 'grounded-fallback-agent'})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'tokens_used': res.get('tokens_used', 50), 'model': 'grounded-fallback-agent', 'mode': 'offline', 'reason': 'GROQ_API_KEY is not configured in .env'})}\n\n"
         return
 
     # Groq streaming implementation
@@ -1557,17 +1800,18 @@ async def stream_chat_agent(
 
         latency = int((time.time() - start_time) * 1000)
         _log_ai_interaction(db, user, role, configured_model, 150, 150, tool_calls_executed, latency)
-        yield f"data: {json.dumps({'type': 'done', 'tokens_used': 300, 'model': configured_model})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'tokens_used': 300, 'model': configured_model, 'mode': 'live', 'reason': None})}\n\n"
 
     except Exception as e:
-        logger.warning(f"[Groq Stream] Error streaming, using fallback: {e}")
+        reason = classify_groq_error(e)
+        logger.warning(f"[Groq Stream] Error streaming ({reason}), using fallback: {e}")
         res = run_fallback_agent(user_message, db, user=user)
         for tc in res.get("tool_calls", []):
             yield f"data: {json.dumps({'type': 'tool_call', 'name': tc['tool'], 'args': tc['args']})}\n\n"
         if res.get("proposed_action"):
             yield f"data: {json.dumps({'type': 'proposed_action', 'action': res['proposed_action']})}\n\n"
         yield f"data: {json.dumps({'type': 'token', 'content': res['response']})}\n\n"
-        yield f"data: {json.dumps({'type': 'done', 'tokens_used': res.get('tokens_used', 50), 'model': 'grounded-fallback-agent'})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'tokens_used': res.get('tokens_used', 50), 'model': 'grounded-fallback-agent', 'mode': 'offline', 'reason': reason})}\n\n"
 
 
 # ─── Audit & Token Usage Logging ────────────────────────────────────
