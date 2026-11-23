@@ -266,11 +266,11 @@ export const AiCopilotPageView: React.FC = () => {
             </div>
             <div className="flex justify-between py-1 border-b border-hairline-light dark:border-hairline-dark">
               <span className="text-muted">Total Requests</span>
-              <span className="font-mono font-semibold">{usageData?.total_requests || 42}</span>
+              <span className="font-mono font-semibold">{usageData?.total_requests != null ? usageData.total_requests : '—'}</span>
             </div>
             <div className="flex justify-between py-1 border-b border-hairline-light dark:border-hairline-dark">
               <span className="text-muted">Cumulative Tokens</span>
-              <span className="font-mono font-semibold">{usageData?.total_tokens || 18450}</span>
+              <span className="font-mono font-semibold">{usageData?.total_tokens != null ? usageData.total_tokens : '—'}</span>
             </div>
             <div className="flex justify-between py-1">
               <span className="text-muted">Safety Mode</span>

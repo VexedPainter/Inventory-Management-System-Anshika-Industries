@@ -265,21 +265,14 @@ export const OrbProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       visitedPagesRef.current.add(pageKey);
 
       let textToSay = '';
-      if (pageKey === 'inventory') {
-        const outCount = pageData?.counts?.OUT ?? 3;
-        textToSay = `${outCount} SKUs are completely out of stock.`;
-      } else if (pageKey === 'sales') {
-        textToSay = '₹1.58L receivables are currently past 30 days.';
-      } else if (pageKey === 'procurement') {
-        textToSay = '4 purchase orders are pending dispatch from vendors.';
-      } else if (pageKey === 'analytics') {
-        textToSay = 'Class-A items account for 78% of cumulative annual spend.';
-      } else if (pageKey === 'audit') {
-        textToSay = 'Tamper-evident audit chain is cryptographically sealed.';
-      } else if (pageKey === 'business-impact') {
-        textToSay = 'Projected annual ROI stands at ₹12.4 Lakhs.';
-      } else if (pageKey === 'dev-motion') {
-        textToSay = 'Testing framer-motion physics at 60fps.';
+      if (pageKey === 'inventory' && typeof pageData?.counts?.OUT === 'number' && pageData.counts.OUT > 0) {
+        textToSay = `${pageData.counts.OUT} SKUs are completely out of stock.`;
+      } else if (pageKey === 'sales' && pageData?.overdueTotal) {
+        textToSay = `₹${Number(pageData.overdueTotal).toLocaleString('en-IN')} in customer receivables are overdue.`;
+      } else if (pageKey === 'procurement' && typeof pageData?.pendingCount === 'number' && pageData.pendingCount > 0) {
+        textToSay = `${pageData.pendingCount} purchase orders are currently open with suppliers.`;
+      } else if (pageKey === 'analytics' && pageData?.classASpendPct) {
+        textToSay = `Class-A items account for ${pageData.classASpendPct}% of cumulative annual spend.`;
       }
 
       if (!textToSay || spokenHistoryRef.current.has(textToSay)) return;

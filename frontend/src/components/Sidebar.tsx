@@ -46,6 +46,7 @@ interface NavItem {
   label: string;
   icon: LucideIcon;
   roles: ('admin' | 'manager' | 'storekeeper')[];
+  devOnly?: boolean;
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -63,7 +64,7 @@ const NAV_ITEMS: NavItem[] = [
   { key: 'users', label: 'User Accounts', icon: UserCog, roles: ['admin'] },
   { key: 'business-impact', label: 'Business Impact', icon: Calculator, roles: ['admin', 'manager'] },
   { key: 'settings', label: 'Settings', icon: Settings, roles: ['admin', 'manager', 'storekeeper'] },
-  { key: 'dev-motion', label: 'Motion System (/dev/motion)', icon: Activity, roles: ['admin', 'manager', 'storekeeper'] },
+  { key: 'dev-motion', label: 'Motion System (/dev/motion)', icon: Activity, roles: ['admin', 'manager', 'storekeeper'], devOnly: true },
 ];
 
 interface SidebarProps {
@@ -82,7 +83,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [isMoreOpen, setIsMoreOpen] = useState(false);
 
   const role = user?.role || 'storekeeper';
-  const visibleItems = NAV_ITEMS.filter(item => item.roles.includes(role));
+  const visibleItems = NAV_ITEMS.filter(item => {
+    if (item.devOnly && !import.meta.env.DEV) return false;
+    return item.roles.includes(role);
+  });
 
   // 4 Primary Mobile tabs
   const mobilePrimaryKeys: TabKey[] = ['dashboard', 'inventory', 'procurement', 'sales'];

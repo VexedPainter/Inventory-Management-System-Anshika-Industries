@@ -11,6 +11,7 @@ import {
   ExternalLink,
   Layers,
   Sparkles,
+  ShieldAlert,
 } from 'lucide-react';
 import { apiFetch } from '../api/client';
 import { useAuth } from '../context/AuthContext';
@@ -24,11 +25,14 @@ export const ReportsView: React.FC = () => {
   const { triggerSuccess } = useOrb();
   const [activeReportTab, setActiveReportTab] = useState<'owner' | 'gst' | 'tally'>('owner');
 
-  // Fetch Owner Summary
+  const isStorekeeper = user?.role === 'storekeeper';
+
+  // Fetch Owner Summary (Gated to Admin and Manager only)
   const { data: ownerData, isLoading: ownerLoading, refetch: refetchOwner } = useQuery({
     queryKey: ['/api/reports/owner-summary'],
     queryFn: () => apiFetch('/api/reports/owner-summary'),
     staleTime: 60000,
+    enabled: !isStorekeeper && activeReportTab === 'owner',
   });
 
   // Fetch GST Sales Register
@@ -40,6 +44,7 @@ export const ReportsView: React.FC = () => {
   });
 
   const metrics = ownerData?.metrics || {};
+  const period = ownerData?.period || {};
 
   return (
     <div className="space-y-6">
@@ -55,7 +60,7 @@ export const ReportsView: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
-          {activeReportTab === 'owner' && (
+          {activeReportTab === 'owner' && !isStorekeeper && (
             <motion.button
               whileTap={{ scale: 0.98 }}
               onClick={() => window.open('/api/reports/owner-summary/pdf', '_blank')}
@@ -66,28 +71,32 @@ export const ReportsView: React.FC = () => {
             </motion.button>
           )}
 
-          <motion.button
-            whileTap={{ scale: 0.98 }}
-            onClick={() => refetchOwner()}
-            className="w-9 h-9 rounded-full bg-card-light dark:bg-card-dark border border-hairline-light dark:border-hairline-dark flex items-center justify-center text-muted hover:text-ink-light"
-          >
-            <RefreshCw size={14} className={ownerLoading ? 'animate-spin' : ''} />
-          </motion.button>
+          {!isStorekeeper && (
+            <motion.button
+              whileTap={{ scale: 0.98 }}
+              onClick={() => refetchOwner()}
+              className="w-9 h-9 rounded-full bg-card-light dark:bg-card-dark border border-hairline-light dark:border-hairline-dark flex items-center justify-center text-muted hover:text-ink-light"
+            >
+              <RefreshCw size={14} className={ownerLoading ? 'animate-spin' : ''} />
+            </motion.button>
+          )}
         </div>
       </div>
 
       {/* Subtab Navigation */}
       <div className="bg-card-light dark:bg-card-dark rounded-card p-4 shadow-bento border border-hairline-light dark:border-hairline-dark flex items-center gap-2">
-        <button
-          onClick={() => setActiveReportTab('owner')}
-          className={`px-4 py-2 rounded-pill text-xs font-semibold transition-all ${
-            activeReportTab === 'owner'
-              ? 'bg-ink-light dark:bg-white text-white dark:text-ink-light shadow-sm'
-              : 'bg-black/5 dark:bg-white/10 text-muted hover:text-ink-light'
-          }`}
-        >
-          Executive Owner Summary
-        </button>
+        {!isStorekeeper && (
+          <button
+            onClick={() => setActiveReportTab('owner')}
+            className={`px-4 py-2 rounded-pill text-xs font-semibold transition-all ${
+              activeReportTab === 'owner'
+                ? 'bg-ink-light dark:bg-white text-white dark:text-ink-light shadow-sm'
+                : 'bg-black/5 dark:bg-white/10 text-muted hover:text-ink-light'
+            }`}
+          >
+            Executive Owner Summary
+          </button>
+        )}
 
         <button
           onClick={() => setActiveReportTab('gst')}
@@ -116,69 +125,118 @@ export const ReportsView: React.FC = () => {
       {/* 1. EXECUTIVE OWNER SUMMARY                                           */}
       {/* ==================================================================== */}
       {activeReportTab === 'owner' && (
-        <div className="space-y-6">
-          {/* 4 Top KPI Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento border border-hairline-light dark:border-hairline-dark">
-              <span className="text-xs text-muted font-medium">Total Billed Revenue</span>
-              <div className="text-2xl font-bold font-mono text-ink-light dark:text-ink-dark mt-2">
-                ₹{(metrics.total_revenue || 116058).toLocaleString('en-IN')}
+        isStorekeeper ? (
+          <div className="bg-card-light dark:bg-card-dark rounded-card p-8 shadow-bento border border-hairline-light dark:border-hairline-dark text-center space-y-3">
+            <ShieldAlert size={36} className="text-muted mx-auto" />
+            <h3 className="text-base font-bold text-ink-light dark:text-ink-dark">
+              Restricted to Admin & Manager Roles
+            </h3>
+            <p className="text-xs text-muted max-w-md mx-auto">
+              Storekeeper accounts do not have clearance for executive financial reports. Please switch to the Statutory GST Registers tab.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {/* 4 Top KPI Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento border border-hairline-light dark:border-hairline-dark">
+                <span className="text-xs text-muted font-medium">Total Billed Revenue</span>
+                <div className="text-2xl font-bold font-mono text-ink-light dark:text-ink-dark mt-2">
+                  {ownerLoading ? (
+                    <Skeleton className="h-7 w-28" />
+                  ) : metrics.sales?.total_revenue != null ? (
+                    `₹${Number(metrics.sales.total_revenue).toLocaleString('en-IN')}`
+                  ) : (
+                    '—'
+                  )}
+                </div>
+                <span className="text-[11px] text-positive mt-0.5 block">
+                  {metrics.sales?.growth_pct_vs_prior != null ? `${metrics.sales.growth_pct_vs_prior > 0 ? '+' : ''}${metrics.sales.growth_pct_vs_prior}% vs prior period` : 'Audited sales total'}
+                </span>
               </div>
-              <span className="text-[11px] text-positive mt-0.5 block">+12.4% vs previous week</span>
+
+              <div className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento border border-hairline-light dark:border-hairline-dark">
+                <span className="text-xs text-muted font-medium">Estimated Gross Profit</span>
+                <div className="text-2xl font-bold font-mono text-positive mt-2">
+                  {ownerLoading ? (
+                    <Skeleton className="h-7 w-28" />
+                  ) : metrics.margin?.gross_profit != null ? (
+                    `₹${Number(metrics.margin.gross_profit).toLocaleString('en-IN')}`
+                  ) : (
+                    '—'
+                  )}
+                </div>
+                <span className="text-[11px] text-muted mt-0.5 block">
+                  {metrics.margin?.gross_margin_pct != null ? `${metrics.margin.gross_margin_pct}% gross margin` : 'Product margin estimation'}
+                </span>
+              </div>
+
+              <div className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento border border-hairline-light dark:border-hairline-dark">
+                <span className="text-xs text-muted font-medium">Overdue Receivables</span>
+                <div className="text-2xl font-bold font-mono text-warning mt-2">
+                  {ownerLoading ? (
+                    <Skeleton className="h-7 w-28" />
+                  ) : metrics.receivables?.total_overdue_value != null ? (
+                    `₹${Number(metrics.receivables.total_overdue_value).toLocaleString('en-IN')}`
+                  ) : (
+                    '—'
+                  )}
+                </div>
+                <span className="text-[11px] text-warning mt-0.5 block">
+                  {metrics.receivables?.overdue_invoices_count != null ? `${metrics.receivables.overdue_invoices_count} overdue invoices` : 'Past agreed credit terms'}
+                </span>
+              </div>
+
+              <div className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento border border-hairline-light dark:border-hairline-dark">
+                <span className="text-xs text-muted font-medium">Dead Stock Capital</span>
+                <div className="text-2xl font-bold font-mono text-sage mt-2">
+                  {ownerLoading ? (
+                    <Skeleton className="h-7 w-28" />
+                  ) : metrics.dead_stock?.tied_capital != null ? (
+                    `₹${Number(metrics.dead_stock.tied_capital).toLocaleString('en-IN')}`
+                  ) : (
+                    '—'
+                  )}
+                </div>
+                <span className="text-[11px] text-muted mt-0.5 block">
+                  {metrics.dead_stock?.count != null ? `${metrics.dead_stock.count} SKUs idle > 90 days` : 'Asset holding valuation'}
+                </span>
+              </div>
             </div>
 
-            <div className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento border border-hairline-light dark:border-hairline-dark">
-              <span className="text-xs text-muted font-medium">Cash Collected</span>
-              <div className="text-2xl font-bold font-mono text-positive mt-2">
-                ₹{(metrics.total_collected || 92400).toLocaleString('en-IN')}
+            {/* AI Synthesized Executive Narrative */}
+            <div className="bg-card-light dark:bg-card-dark rounded-card p-6 shadow-bento border border-hairline-light dark:border-hairline-dark">
+              <div className="flex items-center gap-2 mb-3">
+                <Sparkles size={16} className="text-sage" />
+                <h3 className="text-base font-bold text-ink-light dark:text-ink-dark">
+                  Executive Synthesis & Operations Narrative
+                </h3>
               </div>
-              <span className="text-[11px] text-muted mt-0.5 block">Bank verified clearance</span>
-            </div>
 
-            <div className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento border border-hairline-light dark:border-hairline-dark">
-              <span className="text-xs text-muted font-medium">Overdue Receivables</span>
-              <div className="text-2xl font-bold font-mono text-warning mt-2">
-                ₹{(metrics.overdue_receivables || 23658).toLocaleString('en-IN')}
-              </div>
-              <span className="text-[11px] text-warning mt-0.5 block">Past agreed credit terms</span>
-            </div>
+              {ownerLoading ? (
+                <div className="space-y-2 py-4">
+                  <Skeleton className="h-4 w-full" rounded="md" />
+                  <Skeleton className="h-4 w-5/6" rounded="md" />
+                  <Skeleton className="h-4 w-4/6" rounded="md" />
+                </div>
+              ) : (
+                <div className="prose dark:prose-invert max-w-none text-xs leading-relaxed text-ink-light dark:text-ink-dark">
+                  <MarkdownRenderer content={ownerData?.narrative || 'Weekly operations completed with optimal throughput.'} />
+                </div>
+              )}
 
-            <div className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento border border-hairline-light dark:border-hairline-dark">
-              <span className="text-xs text-muted font-medium">Warehouse Inventory Value</span>
-              <div className="text-2xl font-bold font-mono text-sage mt-2">
-                ₹{(metrics.stock_valuation || 1420500).toLocaleString('en-IN')}
+              <div className="mt-4 pt-3 border-t border-hairline-light dark:border-hairline-dark flex items-center justify-between text-[11px] text-muted">
+                <span>
+                  Period:{' '}
+                  {period?.from_date && period?.to_date
+                    ? `${period.from_date} – ${period.to_date}`
+                    : 'Last 7 Days'}
+                </span>
+                <span className="italic">Grounded in verified database aggregates</span>
               </div>
-              <span className="text-[11px] text-muted mt-0.5 block">Asset holding valuation</span>
             </div>
           </div>
-
-          {/* AI Synthesized Executive Narrative */}
-          <div className="bg-card-light dark:bg-card-dark rounded-card p-6 shadow-bento border border-hairline-light dark:border-hairline-dark">
-            <div className="flex items-center gap-2 mb-3">
-              <Sparkles size={16} className="text-sage" />
-              <h3 className="text-base font-bold text-ink-light dark:text-ink-dark">
-                Executive Synthesis & Operations Narrative
-              </h3>
-            </div>
-
-            {ownerLoading ? (
-              <div className="space-y-2 py-4">
-                <Skeleton className="h-4 w-full" rounded="md" />
-                <Skeleton className="h-4 w-5/6" rounded="md" />
-                <Skeleton className="h-4 w-4/6" rounded="md" />
-              </div>
-            ) : (
-              <div className="prose dark:prose-invert max-w-none text-xs leading-relaxed text-ink-light dark:text-ink-dark">
-                <MarkdownRenderer content={ownerData?.narrative || 'Weekly operations completed with optimal throughput.'} />
-              </div>
-            )}
-
-            <div className="mt-4 pt-3 border-t border-hairline-light dark:border-hairline-dark flex items-center justify-between text-[11px] text-muted">
-              <span>Period: {ownerData?.period || 'Last 7 Days'}</span>
-              <span className="italic">Grounded in verified database aggregates</span>
-            </div>
-          </div>
-        </div>
+        )
       )}
 
       {/* ==================================================================== */}
@@ -200,25 +258,25 @@ export const ReportsView: React.FC = () => {
             </div>
 
             <div className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento border border-hairline-light dark:border-hairline-dark">
-              <h4 className="font-bold text-sm text-ink-light dark:text-ink-dark">Sales Register</h4>
-              <p className="text-xs text-muted mt-1">Taxable value, CGST, SGST, IGST breakdown</p>
+              <h4 className="font-bold text-sm text-ink-light dark:text-ink-dark">GSTR-2B Inward Matching</h4>
+              <p className="text-xs text-muted mt-1">Vendor purchase orders & input tax credits</p>
               <button
-                onClick={() => window.open('/api/reports/gst/sales-register', '_blank')}
+                onClick={() => window.open('/api/reports/gst/gstr2b', '_blank')}
                 className="mt-4 text-xs font-semibold text-sage hover:underline flex items-center gap-1"
               >
-                <span>Export Sales Register CSV</span>
+                <span>Export ITC Reconciliation</span>
                 <Download size={12} />
               </button>
             </div>
 
             <div className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento border border-hairline-light dark:border-hairline-dark">
-              <h4 className="font-bold text-sm text-ink-light dark:text-ink-dark">Purchase Register</h4>
-              <p className="text-xs text-muted mt-1">Input tax credit reconciliation (ITC GSTR-2B)</p>
+              <h4 className="font-bold text-sm text-ink-light dark:text-ink-dark">GSTR-3B Summary</h4>
+              <p className="text-xs text-muted mt-1">Monthly consolidated tax liability return</p>
               <button
-                onClick={() => window.open('/api/reports/gst/purchase-register', '_blank')}
+                onClick={() => window.open('/api/reports/gst/gstr3b', '_blank')}
                 className="mt-4 text-xs font-semibold text-sage hover:underline flex items-center gap-1"
               >
-                <span>Export Purchase Register</span>
+                <span>Export GSTR-3B Excel</span>
                 <Download size={12} />
               </button>
             </div>
@@ -227,30 +285,47 @@ export const ReportsView: React.FC = () => {
       )}
 
       {/* ==================================================================== */}
-      {/* 3. TALLY ERP EXPORT                                                  */}
+      {/* 3. TALLY ERP XML VOUCHERS                                             */}
       {/* ==================================================================== */}
       {activeReportTab === 'tally' && (
         <div className="bg-card-light dark:bg-card-dark rounded-card p-6 shadow-bento border border-hairline-light dark:border-hairline-dark space-y-4">
-          <div className="flex items-center gap-2">
-            <FileSpreadsheet size={18} className="text-sage" />
-            <h3 className="text-base font-bold text-ink-light dark:text-ink-dark">
-              Tally Prime XML Accounting Vouchers
-            </h3>
+          <div>
+            <h4 className="font-bold text-sm text-ink-light dark:text-ink-dark">
+              Tally Prime & ERP 9 XML Export
+            </h4>
+            <p className="text-xs text-muted mt-0.5">
+              Export standard Tally-compatible XML vouchers for instant import into accounting software without re-entry.
+            </p>
           </div>
-          <p className="text-xs text-muted max-w-xl">
-            Export standardized XML ledger vouchers directly consumable by Tally Prime and Tally.ERP 9.
-            Includes Sales Vouchers, Purchase Vouchers, and Bank Receipts with GST ledger mappings.
-          </p>
 
-          <div className="pt-2">
-            <motion.button
-              whileTap={{ scale: 0.98 }}
-              onClick={() => window.open('/api/reports/tally/vouchers', '_blank')}
-              className="px-5 py-2.5 bg-ink-light dark:bg-white text-white dark:text-ink-light rounded-pill text-xs font-semibold shadow-bento sweep-hover flex items-center gap-2"
-            >
-              <Download size={14} />
-              <span>Generate Tally XML Package</span>
-            </motion.button>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+            <div className="p-4 rounded-tile bg-canvas-light/60 dark:bg-black/20 border border-hairline-light dark:border-hairline-dark flex items-center justify-between">
+              <div>
+                <p className="text-xs font-semibold text-ink-light dark:text-ink-dark">Sales & Tax Invoices</p>
+                <p className="text-[11px] text-muted">All confirmed sales with CGST/SGST/IGST breakdown</p>
+              </div>
+              <button
+                onClick={() => window.open('/api/reports/tally/vouchers?type=sales', '_blank')}
+                className="px-3 py-1.5 bg-sage text-white text-xs font-semibold rounded-pill hover:bg-sage-dark transition-all flex items-center gap-1"
+              >
+                <Download size={12} />
+                <span>XML</span>
+              </button>
+            </div>
+
+            <div className="p-4 rounded-tile bg-canvas-light/60 dark:bg-black/20 border border-hairline-light dark:border-hairline-dark flex items-center justify-between">
+              <div>
+                <p className="text-xs font-semibold text-ink-light dark:text-ink-dark">Purchase & GRN Vouchers</p>
+                <p className="text-[11px] text-muted">Delivered vendor receipts with purchase ledger ledger entries</p>
+              </div>
+              <button
+                onClick={() => window.open('/api/reports/tally/vouchers?type=purchase', '_blank')}
+                className="px-3 py-1.5 bg-sage text-white text-xs font-semibold rounded-pill hover:bg-sage-dark transition-all flex items-center gap-1"
+              >
+                <Download size={12} />
+                <span>XML</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

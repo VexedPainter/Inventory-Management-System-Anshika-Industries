@@ -60,10 +60,12 @@ export const DashboardView: React.FC<DashboardProps> = ({
     staleTime: 30000,
   });
 
-  // 2. Fetch owner summary metrics
+  // 2. Fetch owner summary metrics (not for storekeeper)
+  const isStorekeeper = user?.role === 'storekeeper';
   const { data: ownerData } = useQuery({
     queryKey: ['owner-summary'],
     queryFn: () => apiFetch('/api/reports/owner-summary'),
+    enabled: !isStorekeeper,
     staleTime: 60000,
   });
 
@@ -399,13 +401,20 @@ export const DashboardView: React.FC<DashboardProps> = ({
 
             {/* Floating metrics chip */}
             <div className="flex items-center gap-3 mb-2 flex-wrap">
-              <div className="bg-canvas-light dark:bg-black/20 rounded-pill px-3 py-1 flex items-center gap-2 text-xs border border-hairline-light dark:border-hairline-dark">
-                <span className="text-muted">Turnover</span>
-                <span className="font-semibold text-ink-light dark:text-ink-dark font-mono">1.7x</span>
-                <span className="text-[10px] text-positive bg-positive/10 px-1.5 py-0.2 rounded font-semibold">+8.4%</span>
-              </div>
+              {ownerData?.metrics?.sales?.growth_pct_vs_prior != null && (
+                <div className="bg-canvas-light dark:bg-black/20 rounded-pill px-3 py-1 flex items-center gap-2 text-xs border border-hairline-light dark:border-hairline-dark">
+                  <span className="text-muted">Growth</span>
+                  <span className={`text-[10px] ${ownerData.metrics.sales.growth_pct_vs_prior >= 0 ? 'text-positive bg-positive/10' : 'text-negative bg-negative/10'} px-1.5 py-0.2 rounded font-semibold font-mono`}>
+                    {ownerData.metrics.sales.growth_pct_vs_prior >= 0 ? '+' : ''}{ownerData.metrics.sales.growth_pct_vs_prior.toFixed(1)}%
+                  </span>
+                </div>
+              )}
               <div className="text-xs text-muted">
-                Weekly Revenue: <span className="font-mono font-semibold text-ink-light dark:text-ink-dark">₹{(ownerData?.total_revenue || 116058).toLocaleString('en-IN')}</span>
+                Weekly Revenue: <span className="font-mono font-semibold text-ink-light dark:text-ink-dark">
+                  {ownerData?.metrics?.sales?.total_revenue != null
+                    ? `₹${Number(ownerData.metrics.sales.total_revenue).toLocaleString('en-IN')}`
+                    : '—'}
+                </span>
               </div>
             </div>
 
@@ -568,7 +577,7 @@ export const DashboardView: React.FC<DashboardProps> = ({
               </div>
               <div className="text-center">
                 <div className="text-base font-semibold font-mono text-ink-light dark:text-ink-dark">
-                  <CountUp value={ownerData?.invoices_count || 4} duration={900} />
+                  <CountUp value={ownerData?.metrics?.sales?.invoice_count ?? (dashData?.sales_funnel?.confirmed_orders || 0)} duration={900} />
                 </div>
                 <div className="text-[10px] text-muted">Invoices</div>
               </div>
@@ -731,7 +740,11 @@ export const DashboardView: React.FC<DashboardProps> = ({
             <div className="mt-3 pt-3 border-t border-hairline-light dark:border-hairline-dark flex items-center justify-between text-xs text-muted">
               <span>Total Overdue</span>
               <span className="font-mono font-semibold text-ink-light dark:text-ink-dark">
-                ₹{(ownerData?.overdue_receivables || 0).toLocaleString('en-IN')}
+                {ownerData?.metrics?.receivables?.total_overdue_value != null
+                  ? `₹${Number(ownerData.metrics.receivables.total_overdue_value).toLocaleString('en-IN')}`
+                  : (dashData?.receivables_ageing?.overdue_60_plus_days != null
+                    ? `₹${Number(dashData.receivables_ageing.overdue_60_plus_days).toLocaleString('en-IN')}`
+                    : '—')}
               </span>
             </div>
           </motion.div>

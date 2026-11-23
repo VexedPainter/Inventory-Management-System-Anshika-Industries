@@ -425,14 +425,14 @@ export const SalesView: React.FC = () => {
                 <h4 className="text-base font-bold text-ink-light dark:text-ink-dark mt-2">
                   {opp.title || opp.customer_name}
                 </h4>
-                <p className="text-xs text-muted mt-1">{opp.description || 'Welding consumables quarterly supply'}</p>
+                <p className="text-xs text-muted mt-1">{opp.description || '—'}</p>
               </div>
 
               <div className="pt-3 border-t border-hairline-light dark:border-hairline-dark flex items-center justify-between">
                 <div>
                   <span className="text-[10px] text-muted block">Deal Value</span>
                   <span className="font-mono font-bold text-sm text-ink-light dark:text-ink-dark">
-                    ₹{(opp.estimated_value || 120000).toLocaleString('en-IN')}
+                    {opp.estimated_value != null ? `₹${Number(opp.estimated_value).toLocaleString('en-IN')}` : '—'}
                   </span>
                 </div>
                 <button className="text-xs text-sage font-semibold hover:underline flex items-center gap-1">

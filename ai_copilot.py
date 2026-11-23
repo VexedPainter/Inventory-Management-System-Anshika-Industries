@@ -30,8 +30,9 @@ from database import (
 )
 from preventive_intelligence import (
     compute_item_status, calculate_forecast, compute_suggested_reorder_level,
-    compute_items_status_map
+    compute_items_status_map, compute_abc_xyz_classification
 )
+from business_reports import compute_owner_summary_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -578,6 +579,11 @@ def execute_get_customer(db: Session, name: str) -> dict:
     return {"count": len(results), "customers": results}
 
 
+def execute_owner_summary(db: Session) -> dict:
+    """Fetch executive owner summary metrics including revenue, margin, receivables and dead stock."""
+    return compute_owner_summary_metrics(db)
+
+
 def execute_get_receivables(db: Session) -> dict:
     invoices = db.query(Invoice).filter(Invoice.status != "CANCELLED").all()
     today_d = datetime.date.today()
@@ -823,6 +829,10 @@ def execute_tool(tool_name: str, args: dict, db: Session) -> dict:
             return execute_get_customer(db, args.get("name", ""))
         elif tool_name == "get_receivables":
             return execute_get_receivables(db)
+        elif tool_name in ("owner_summary", "get_owner_summary"):
+            return execute_owner_summary(db)
+        elif tool_name == "abc_xyz_analysis":
+            return compute_abc_xyz_classification(db)
         elif tool_name == "create_draft_po":
             return execute_create_draft_po(db, args.get("supplier", ""), args.get("lines", []))
         elif tool_name == "stock_out":
@@ -986,7 +996,7 @@ def run_fallback_agent(user_message: str, db: Session, user: str = "storekeeper"
             return {"response": narrative, "model": "grounded-fallback-agent", "tokens_used": 60, "tool_calls": tool_calls, "proposed_action": proposed_action, "status": "success"}
 
     # 5. READ: Low stock & Reorder suggestions
-    if any(k in q for k in ["low stock", "reorder", "replenish", "kitna bacha", "khatam", "shortage"]):
+    if any(k in q for k in ["low stock", "low on stock", "zero stock", "reorder", "replenish", "kitna bacha", "khatam", "shortage"]):
         data = execute_get_low_stock(db)
         tool_calls.append({"tool": "get_low_stock", "args": {}})
         items = data["items"]
@@ -1039,8 +1049,8 @@ def run_fallback_agent(user_message: str, db: Session, user: str = "storekeeper"
                 ]
                 return {"response": "\n".join(lines), "model": "grounded-fallback-agent", "tokens_used": 100, "tool_calls": tool_calls, "proposed_action": None, "status": "success"}
 
-    # 7. READ: Receivables / Invoices
-    if any(k in q for k in ["receivable", "debt", "ageing", "unpaid", "outstanding", "balance", "udhari", "invoices"]):
+    # 7. READ: Receivables / Invoices / Overdue Debtors
+    if any(k in q for k in ["receivable", "debt", "debtor", "who owes", "who owes us money", "overdue", "ageing", "unpaid", "outstanding", "balance", "udhari", "invoices"]):
         data = execute_get_receivables(db)
         tool_calls.append({"tool": "get_receivables", "args": {}})
         bk = data["ageing_buckets"]
@@ -1057,6 +1067,44 @@ def run_fallback_agent(user_message: str, db: Session, user: str = "storekeeper"
                 lines.append(f"- Invoice `{inv['invoice_no']}` ({inv['customer']}): Balance Due **₹{inv['balance_due']:,.2f}** ({inv['age_days']} days old)")
         narrative = "\n".join(lines)
         return {"response": narrative, "model": "grounded-fallback-agent", "tokens_used": 125, "tool_calls": tool_calls, "proposed_action": None, "status": "success"}
+
+    # 7b. READ: Owner / Weekly Summary & Revenue
+    if any(k in q for k in ["summarise this week", "summarize this week", "weekly summary", "summarise", "summarize", "weekly sales", "weekly revenue", "invoice count", "owner summary"]):
+        data = execute_owner_summary(db)
+        tool_calls.append({"tool": "owner_summary", "args": {}})
+        period = data.get("period", {})
+        sales = data.get("sales", {})
+        margin = data.get("margin", {})
+        rec = data.get("receivables", {})
+        growth = sales.get("growth_pct_vs_prior", 0)
+        growth_str = f"+{growth:.1f}%" if growth >= 0 else f"{growth:.1f}%"
+        lines = [
+            f"**Weekly Business & Executive Summary ({period.get('from_date', '')} – {period.get('to_date', '')}):**\n",
+            f"- **Total Sales Revenue**: ₹{sales.get('total_revenue', 0):,.2f} ({sales.get('invoice_count', 0)} invoices, Growth: {growth_str})",
+            f"- **Taxable Sales**: ₹{sales.get('taxable_sales', 0):,.2f} (Avg invoice: ₹{sales.get('avg_invoice_value', 0):,.2f})",
+            f"- **Gross Margin**: ₹{margin.get('gross_profit', 0):,.2f} ({margin.get('gross_margin_pct', 0):.1f}%)",
+            f"- **Overdue Receivables**: ₹{rec.get('total_overdue_value', 0):,.2f} across {rec.get('overdue_customers_count', 0)} clients"
+        ]
+        narrative = "\n".join(lines)
+        return {"response": narrative, "model": "grounded-fallback-agent", "tokens_used": 120, "tool_calls": tool_calls, "proposed_action": None, "status": "success"}
+
+    # 7c. READ: ABC-XYZ Classification & Pareto
+    if any(k in q for k in ["abc-xyz", "abc xyz", "class-a", "class a", "pareto", "matrix class"]):
+        try:
+            data = compute_abc_xyz_classification(db)
+            tool_calls.append({"tool": "abc_xyz_analysis", "args": {}})
+            items = data.get("items", [])
+            class_a = [i for i in items if i.get("abc") == "A" or str(i.get("matrix_class", "")).startswith("A")]
+            lines = [
+                f"**ABC-XYZ Classification Analysis (Total Items: {data.get('total_items', len(items))}, Annual COGS: ₹{data.get('total_annual_cogs', 0):,.2f}):**\n",
+                f"- **Class A Items (Top 80% consumption value)**: {len(class_a)} SKUs"
+            ]
+            for it in class_a[:5]:
+                lines.append(f"- **{it['name']}** (`{it['sku']}`): Class **{it.get('matrix_class', 'AX')}** | Annual Value: ₹{it.get('annual_consumption_value', 0):,.2f} ({it.get('cum_pct', 0):.1f}% cumulative)")
+            narrative = "\n".join(lines)
+            return {"response": narrative, "model": "grounded-fallback-agent", "tokens_used": 120, "tool_calls": tool_calls, "proposed_action": None, "status": "success"}
+        except Exception as e:
+            logger.error(f"ABC-XYZ fallback error: {e}")
 
     # 8. READ: Open Purchase Orders
     if any(k in q for k in ["open po", "pending delivery", "purchase order list", "procurement list", "open purchase orders", "list all open"]):

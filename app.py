@@ -988,8 +988,12 @@ async def root_redirect(request: Request):
 
 @app.get("/login")
 async def login_page():
-    login_file = os.path.join(os.path.dirname(__file__), "static", "login.html")
-    return FileResponse(login_file)
+    return RedirectResponse(url="/", status_code=302)
+
+@app.get("/legacy")
+async def legacy_ui():
+    legacy_file = os.path.join(os.path.dirname(__file__), "static", "legacy.html")
+    return FileResponse(legacy_file)
 
 @app.get("/manifest.json")
 async def get_manifest():

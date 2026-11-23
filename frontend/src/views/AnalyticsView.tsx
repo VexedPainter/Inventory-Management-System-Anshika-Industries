@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   BarChart3,
@@ -34,16 +34,18 @@ export const AnalyticsView: React.FC = () => {
     staleTime: 60000,
   });
 
-  const abcList = Array.isArray(rawAbc) ? rawAbc : [];
+  const abcList: any[] = rawAbc?.items || (Array.isArray(rawAbc) ? rawAbc : []);
 
   // What-If State
   const [leadTimeDelta, setLeadTimeDelta] = useState(3);
   const [demandIncreasePct, setDemandIncreasePct] = useState(20);
   const [whatIfResult, setWhatIfResult] = useState<any>(null);
   const [isSimulating, setIsSimulating] = useState(false);
+  const [whatIfError, setWhatIfError] = useState<string | null>(null);
 
   const handleSimulate = async () => {
     setIsSimulating(true);
+    setWhatIfError(null);
     try {
       const res = await apiFetch('/api/analytics/what-if', {
         method: 'POST',
@@ -54,14 +56,8 @@ export const AnalyticsView: React.FC = () => {
       });
       setWhatIfResult(res);
     } catch (err: any) {
-      // Fallback calculation for preview
-      const safetyStockDelta = Math.round(Number(leadTimeDelta) * 4.2 + (Number(demandIncreasePct) / 100) * 15);
-      setWhatIfResult({
-        impact_summary: `A +${leadTimeDelta} day lead time delay combined with +${demandIncreasePct}% demand surge increases recommended safety buffer by ${safetyStockDelta}% across Class-A inventory.`,
-        recommended_buffer_increase_pct: safetyStockDelta,
-        at_risk_skus_count: Math.round(Number(leadTimeDelta) * 1.5 + 2),
-        estimated_capital_requirement: 145000 * (1 + Number(demandIncreasePct) / 100),
-      });
+      setWhatIfError(err.message || 'What-If calculation failed');
+      setWhatIfResult(null);
     } finally {
       setIsSimulating(false);
     }
@@ -99,194 +95,254 @@ export const AnalyticsView: React.FC = () => {
               : 'bg-black/5 dark:bg-white/10 text-muted hover:text-ink-light'
           }`}
         >
-          ABC-XYZ Classification Matrix ({abcList.length})
+          ABC-XYZ Matrix
         </button>
 
         <button
-          onClick={() => {
-            setActiveTab('what-if');
-            if (!whatIfResult) handleSimulate();
-          }}
+          onClick={() => setActiveTab('what-if')}
           className={`px-4 py-2 rounded-pill text-xs font-semibold transition-all ${
             activeTab === 'what-if'
               ? 'bg-ink-light dark:bg-white text-white dark:text-ink-light shadow-sm'
               : 'bg-black/5 dark:bg-white/10 text-muted hover:text-ink-light'
           }`}
         >
-          What-If Stress Simulator
+          Demand What-If Simulator
         </button>
       </div>
 
       {/* ==================================================================== */}
-      {/* 1. ABC-XYZ CLASSIFICATION TABLE (56px rows, sticky header)           */}
+      {/* 1. ABC-XYZ CLASSIFICATION MATRIX                                     */}
       {/* ==================================================================== */}
       {activeTab === 'abc-xyz' && (
-        <div className="bg-card-light dark:bg-card-dark rounded-card shadow-bento border border-hairline-light dark:border-hairline-dark overflow-hidden">
-          <div className="overflow-x-auto max-h-[640px] no-scrollbar">
-            <table className="w-full text-left text-xs border-collapse">
-              <thead className="sticky top-0 z-10 bg-white/85 dark:bg-[#181B1A]/90 backdrop-blur-md border-b border-hairline-light dark:border-hairline-dark text-muted font-medium uppercase tracking-wider text-[11px]">
-                <tr>
-                  <th className="py-3.5 px-4">SKU Code</th>
-                  <th className="py-3.5 px-4">Item Name</th>
-                  <th className="py-3.5 px-4 text-center">Class Matrix</th>
-                  <th className="py-3.5 px-4 text-right">Annual Consumption</th>
-                  <th className="py-3.5 px-4 text-right">Annual Valuation Spend</th>
-                  <th className="py-3.5 px-4 text-center">Inventory Strategy</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-hairline-light dark:divide-hairline-dark">
-                {abcLoading ? (
-                  Array.from({ length: 6 }).map((_, i) => (
-                    <tr key={i} className="h-14">
-                      <td colSpan={6} className="px-4">
-                        <Skeleton className="h-8 w-full" rounded="md" />
+        <div className="space-y-6">
+          {/* Matrix Overview Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento border border-hairline-light dark:border-hairline-dark">
+              <span className="text-xs text-muted font-medium">Class AX / AY (Top Spares)</span>
+              <div className="text-xl font-bold font-mono text-positive mt-1">
+                {rawAbc?.matrix ? `${(rawAbc.matrix.AX || []).length + (rawAbc.matrix.AY || []).length} SKUs` : '—'}
+              </div>
+              <p className="text-[11px] text-muted mt-1">High revenue value + stable predictable consumption run rate.</p>
+            </div>
+
+            <div className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento border border-hairline-light dark:border-hairline-dark">
+              <span className="text-xs text-muted font-medium">Class AZ (Critical Risk)</span>
+              <div className="text-xl font-bold font-mono text-negative mt-1">
+                {rawAbc?.matrix ? `${(rawAbc.matrix.AZ || []).length} SKUs` : '—'}
+              </div>
+              <p className="text-[11px] text-muted mt-1">High revenue impact + volatile unpredictable factory demand spikes.</p>
+            </div>
+
+            <div className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento border border-hairline-light dark:border-hairline-dark">
+              <span className="text-xs text-muted font-medium">Class CZ (Long Tail)</span>
+              <div className="text-xl font-bold font-mono text-muted mt-1">
+                {rawAbc?.matrix ? `${(rawAbc.matrix.CZ || []).length} SKUs` : '—'}
+              </div>
+              <p className="text-[11px] text-muted mt-1">Low revenue consumption + erratic sporadic demand.</p>
+            </div>
+          </div>
+
+          {/* Table */}
+          <div className="bg-card-light dark:bg-card-dark rounded-card shadow-bento border border-hairline-light dark:border-hairline-dark overflow-hidden">
+            <div className="p-4 border-b border-hairline-light dark:border-hairline-dark flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-ink-light dark:text-ink-dark">
+                  Pareto Classification Table
+                </h3>
+                <p className="text-xs text-muted">Ranked by annual consumption spend value and demand volatility coefficient</p>
+              </div>
+              <span className="text-xs font-mono font-medium text-muted">
+                {abcList.length} SKUs analyzed
+              </span>
+            </div>
+
+            <div className="overflow-x-auto max-h-[560px]">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead className="sticky top-0 bg-card-light/95 dark:bg-card-dark/95 backdrop-blur-md border-b border-hairline-light dark:border-hairline-dark z-10 text-[11px] font-semibold text-muted uppercase">
+                  <tr>
+                    <th className="py-3 px-4">SKU</th>
+                    <th className="py-3 px-4">Part Description</th>
+                    <th className="py-3 px-4 text-center">Matrix Class</th>
+                    <th className="py-3 px-4 text-right">Annual Qty Consumed</th>
+                    <th className="py-3 px-4 text-right">Annual Spend Value</th>
+                    <th className="py-3 px-4 text-right">Cumulative %</th>
+                    <th className="py-3 px-4 text-center">Procurement Strategy</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-hairline-light dark:divide-hairline-dark">
+                  {abcLoading ? (
+                    <tr>
+                      <td colSpan={7} className="p-6">
+                        <div className="space-y-3">
+                          <Skeleton className="h-6 w-full" />
+                          <Skeleton className="h-6 w-full" />
+                          <Skeleton className="h-6 w-full" />
+                        </div>
                       </td>
                     </tr>
-                  ))
-                ) : (
-                  abcList.map((a: any, idx: number) => {
-                    const cls = `${a.abc_class || 'A'}-${a.xyz_class || 'X'}`;
-                    const isHighPriority = a.abc_class === 'A';
-                    return (
-                      <tr key={a.id || idx} className="h-14 hover:bg-black/2 dark:hover:bg-white/2 transition-colors">
-                        <td className="py-2 px-4 font-mono font-bold text-sage">
-                          {a.sku}
-                        </td>
-                        <td className="py-2 px-4 font-semibold text-ink-light dark:text-ink-dark">
-                          {a.name}
-                        </td>
-                        <td className="py-2 px-4 text-center">
-                          <span
-                            className={`font-mono text-xs font-bold px-2.5 py-0.5 rounded-full ${
-                              isHighPriority
-                                ? 'bg-positive/10 text-positive border border-positive/20'
-                                : 'bg-sage/10 text-sage'
-                            }`}
-                          >
-                            {cls}
-                          </span>
-                        </td>
-                        <td className="py-2 px-4 text-right font-mono font-semibold">
-                          {(a.annual_consumption || 120).toLocaleString('en-IN')} units
-                        </td>
-                        <td className="py-2 px-4 text-right font-mono font-bold text-ink-light dark:text-ink-dark">
-                          ₹{(a.annual_spend || 45000).toLocaleString('en-IN')}
-                        </td>
-                        <td className="py-2 px-4 text-center text-[11px] text-muted">
-                          {isHighPriority ? 'Strict Control & JIT Reorder' : 'Standard Buffer Buffer'}
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
+                  ) : abcList.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="p-8 text-center text-muted">
+                        No ABC-XYZ items classified yet.
+                      </td>
+                    </tr>
+                  ) : (
+                    abcList.map((a: any, idx: number) => {
+                      const cls = a.matrix_class || `${a.abc || ''}${a.xyz || ''}` || '—';
+                      const isHighPriority = cls.startsWith('A');
+
+                      return (
+                        <tr key={a.id || idx} className="h-14 hover:bg-black/2 dark:hover:bg-white/2 transition-colors">
+                          <td className="py-2 px-4 font-mono font-bold text-sage">
+                            {a.sku}
+                          </td>
+                          <td className="py-2 px-4 font-semibold text-ink-light dark:text-ink-dark">
+                            {a.name}
+                          </td>
+                          <td className="py-2 px-4 text-center">
+                            <span
+                              className={`font-mono text-xs font-bold px-2.5 py-0.5 rounded-full ${
+                                isHighPriority
+                                  ? 'bg-positive/10 text-positive border border-positive/20'
+                                  : 'bg-sage/10 text-sage'
+                              }`}
+                            >
+                              {cls}
+                            </span>
+                          </td>
+                          <td className="py-2 px-4 text-right font-mono font-semibold">
+                            {a.annual_quantity_consumed != null ? `${Number(a.annual_quantity_consumed).toLocaleString('en-IN')} units` : '—'}
+                          </td>
+                          <td className="py-2 px-4 text-right font-mono font-bold text-ink-light dark:text-ink-dark">
+                            {a.annual_consumption_value != null ? `₹${Number(a.annual_consumption_value).toLocaleString('en-IN')}` : '—'}
+                          </td>
+                          <td className="py-2 px-4 text-right font-mono text-muted">
+                            {a.cum_pct != null ? `${a.cum_pct}%` : '—'}
+                          </td>
+                          <td className="py-2 px-4 text-center text-[11px] text-muted">
+                            {isHighPriority ? 'Strict Control & JIT Reorder' : 'Standard Buffer'}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
 
       {/* ==================================================================== */}
-      {/* 2. WHAT-IF STRESS SIMULATOR                                          */}
+      {/* 2. DEMAND WHAT-IF SIMULATOR                                          */}
       {/* ==================================================================== */}
       {activeTab === 'what-if' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Controls Column (5 cols) */}
-          <div className="lg:col-span-5 bg-card-light dark:bg-card-dark rounded-card p-6 shadow-bento border border-hairline-light dark:border-hairline-dark space-y-6">
-            <div className="flex items-center gap-2">
-              <Sliders size={18} className="text-sage" />
-              <h3 className="text-base font-bold text-ink-light dark:text-ink-dark">
-                Simulation Parameters
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Controls */}
+          <div className="bg-card-light dark:bg-card-dark rounded-card p-6 shadow-bento border border-hairline-light dark:border-hairline-dark space-y-5">
+            <div>
+              <h3 className="text-sm font-semibold text-ink-light dark:text-ink-dark flex items-center gap-1.5">
+                <Sliders size={16} className="text-sage" />
+                <span>Simulation Parameters</span>
               </h3>
+              <p className="text-xs text-muted mt-1">
+                Stress-test factory replenishment buffers against supplier lead-time delays and surging automotive demand.
+              </p>
             </div>
 
-            {/* Slider 1: Lead Time Delta */}
-            <div className="space-y-2">
-              <div className="flex justify-between text-xs font-semibold">
-                <span className="text-muted">Vendor Lead Time Increase</span>
-                <span className="font-mono text-sage">+{leadTimeDelta} Days</span>
+            <div className="space-y-4 pt-2">
+              <div>
+                <div className="flex justify-between text-xs font-medium mb-1">
+                  <span>Vendor Lead Time Delay:</span>
+                  <span className="font-mono text-sage font-bold">+{leadTimeDelta} Days</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="14"
+                  value={leadTimeDelta}
+                  onChange={(e) => setLeadTimeDelta(Number(e.target.value))}
+                  className="w-full accent-sage cursor-pointer"
+                />
               </div>
-              <input
-                type="range"
-                min="0"
-                max="14"
-                value={leadTimeDelta}
-                onChange={e => setLeadTimeDelta(Number(e.target.value))}
-                className="w-full accent-sage cursor-pointer"
-              />
-              <span className="text-[10px] text-muted block">Simulates port congestion or supplier delays</span>
-            </div>
 
-            {/* Slider 2: Demand Surge */}
-            <div className="space-y-2">
-              <div className="flex justify-between text-xs font-semibold">
-                <span className="text-muted">Demand / Run-rate Surge</span>
-                <span className="font-mono text-positive">+{demandIncreasePct}%</span>
+              <div>
+                <div className="flex justify-between text-xs font-medium mb-1">
+                  <span>Demand Increase Surge:</span>
+                  <span className="font-mono text-sage font-bold">+{demandIncreasePct}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="5"
+                  value={demandIncreasePct}
+                  onChange={(e) => setDemandIncreasePct(Number(e.target.value))}
+                  className="w-full accent-sage cursor-pointer"
+                />
               </div>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                step="5"
-                value={demandIncreasePct}
-                onChange={e => setDemandIncreasePct(Number(e.target.value))}
-                className="w-full accent-positive cursor-pointer"
-              />
-              <span className="text-[10px] text-muted block">Simulates peak quarterly production demand</span>
-            </div>
 
-            <motion.button
-              whileTap={{ scale: 0.98 }}
-              onClick={handleSimulate}
-              disabled={isSimulating}
-              className="w-full py-2.5 bg-ink-light dark:bg-white text-white dark:text-ink-light font-semibold rounded-pill text-xs shadow-bento sweep-hover transition-all"
-            >
-              {isSimulating ? 'Simulating…' : 'Run Scenario Analysis'}
-            </motion.button>
+              <motion.button
+                whileTap={{ scale: 0.98 }}
+                onClick={handleSimulate}
+                disabled={isSimulating}
+                className="w-full py-2.5 bg-ink-light dark:bg-white text-white dark:text-ink-light rounded-pill text-xs font-semibold shadow-bento sweep-hover flex items-center justify-center gap-2 mt-4"
+              >
+                <span>{isSimulating ? 'Simulating...' : 'Run What-If Scenario'}</span>
+                <ArrowRight size={13} />
+              </motion.button>
+            </div>
           </div>
 
-          {/* Results Column (7 cols) */}
-          <div className="lg:col-span-7 bg-card-light dark:bg-card-dark rounded-card p-6 shadow-bento border border-hairline-light dark:border-hairline-dark flex flex-col justify-between space-y-6">
-            <div>
-              <div className="flex items-center gap-2 mb-2">
-                <ShieldAlert size={18} className="text-warning" />
-                <h3 className="text-base font-bold text-ink-light dark:text-ink-dark">
-                  Stockout & Working Capital Impact
-                </h3>
+          {/* Results Output */}
+          <div className="lg:col-span-2 bg-card-light dark:bg-card-dark rounded-card p-6 shadow-bento border border-hairline-light dark:border-hairline-dark flex flex-col justify-between">
+            {whatIfError ? (
+              <div className="p-4 rounded-tile bg-negative/10 border border-negative/20 text-negative text-xs">
+                {whatIfError}
               </div>
+            ) : whatIfResult ? (
+              <div className="space-y-5">
+                <div className="flex items-center gap-2 text-warning">
+                  <AlertTriangle size={18} />
+                  <h4 className="text-sm font-bold text-ink-light dark:text-ink-dark">
+                    Scenario Impact Assessment
+                  </h4>
+                </div>
 
-              {whatIfResult ? (
-                <div className="space-y-4">
-                  <p className="text-xs text-ink-light dark:text-ink-dark leading-relaxed">
-                    {whatIfResult.impact_summary}
-                  </p>
+                <p className="text-xs text-muted leading-relaxed">
+                  {whatIfResult.impact_summary || whatIfResult.summary || 'Simulation completed.'}
+                </p>
 
-                  <div className="grid grid-cols-2 gap-3 pt-2">
-                    <div className="p-3 bg-canvas-light/60 dark:bg-black/20 rounded-tile">
-                      <span className="text-[10px] text-muted block">SKUs at Stockout Risk</span>
-                      <span className="font-mono font-bold text-lg text-negative">
-                        {whatIfResult.at_risk_skus_count || 5} SKUs
-                      </span>
-                    </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
+                  <div className="p-4 rounded-tile bg-canvas-light/60 dark:bg-black/20 border border-hairline-light dark:border-hairline-dark">
+                    <span className="text-[11px] text-muted block">Recommended Buffer Increase</span>
+                    <span className="text-lg font-bold font-mono text-positive mt-1 block">
+                      {whatIfResult.recommended_buffer_increase_pct != null ? `+${whatIfResult.recommended_buffer_increase_pct}%` : '—'}
+                    </span>
+                  </div>
 
-                    <div className="p-3 bg-canvas-light/60 dark:bg-black/20 rounded-tile">
-                      <span className="text-[10px] text-muted block">Capital Buffer Required</span>
-                      <span className="font-mono font-bold text-lg text-sage">
-                        ₹{(whatIfResult.estimated_capital_requirement || 174000).toLocaleString('en-IN')}
-                      </span>
-                    </div>
+                  <div className="p-4 rounded-tile bg-canvas-light/60 dark:bg-black/20 border border-hairline-light dark:border-hairline-dark">
+                    <span className="text-[11px] text-muted block">SKUs at Stockout Risk</span>
+                    <span className="text-lg font-bold font-mono text-negative mt-1 block">
+                      {whatIfResult.at_risk_skus_count != null ? `${whatIfResult.at_risk_skus_count} Parts` : '—'}
+                    </span>
+                  </div>
+
+                  <div className="p-4 rounded-tile bg-canvas-light/60 dark:bg-black/20 border border-hairline-light dark:border-hairline-dark">
+                    <span className="text-[11px] text-muted block">Est. Working Capital Impact</span>
+                    <span className="text-lg font-bold font-mono text-sage mt-1 block">
+                      {whatIfResult.estimated_capital_requirement != null ? `₹${Number(whatIfResult.estimated_capital_requirement).toLocaleString('en-IN')}` : '—'}
+                    </span>
                   </div>
                 </div>
-              ) : (
-                <div className="py-12 text-center text-xs text-muted">
-                  Adjust parameters on the left and run the simulation.
-                </div>
-              )}
-            </div>
-
-            <div className="pt-3 border-t border-hairline-light dark:border-hairline-dark text-[11px] text-muted flex items-center justify-between">
-              <span>Risk modeling engine</span>
-              <span className="font-mono text-positive">Deterministic Safety Stock Model</span>
-            </div>
+              </div>
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center py-16 text-center text-muted">
+                <Sliders size={32} className="opacity-40 mb-2" />
+                <p className="text-xs font-semibold">Select parameters and click "Run What-If Scenario"</p>
+                <p className="text-[11px] max-w-xs mt-1">Calculates safety stock buffer changes against real catalog lead times.</p>
+              </div>
+            )}
           </div>
         </div>
       )}
