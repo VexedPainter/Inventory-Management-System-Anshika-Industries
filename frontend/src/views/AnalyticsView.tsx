@@ -120,8 +120,13 @@ export const AnalyticsView: React.FC = () => {
             <div className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento border border-hairline-light dark:border-hairline-dark">
               <span className="text-xs text-muted font-medium">Class AX / AY (Top Spares)</span>
               <div className="text-xl font-bold font-mono text-positive mt-1">
-                {rawAbc?.matrix?.AX != null || rawAbc?.matrix?.AY != null
-                  ? `${(Number(rawAbc?.matrix?.AX?.count || 0) + Number(rawAbc?.matrix?.AY?.count || 0))} SKUs`
+                {rawAbc?.matrix?.AX?.count != null || rawAbc?.matrix?.AY?.count != null
+                  ? (() => {
+                      const ax = Number(rawAbc?.matrix?.AX?.count);
+                      const ay = Number(rawAbc?.matrix?.AY?.count);
+                      const total = (isNaN(ax) ? 0 : ax) + (isNaN(ay) ? 0 : ay);
+                      return `${total} SKUs`;
+                    })()
                   : '—'}
               </div>
               <p className="text-[11px] text-muted mt-1">High revenue value + stable predictable consumption run rate.</p>
@@ -130,7 +135,7 @@ export const AnalyticsView: React.FC = () => {
             <div className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento border border-hairline-light dark:border-hairline-dark">
               <span className="text-xs text-muted font-medium">Class AZ (Critical Risk)</span>
               <div className="text-xl font-bold font-mono text-negative mt-1">
-                {rawAbc?.matrix?.AZ?.count != null
+                {rawAbc?.matrix?.AZ?.count != null && !isNaN(Number(rawAbc.matrix.AZ.count))
                   ? `${Number(rawAbc.matrix.AZ.count)} SKUs`
                   : '—'}
               </div>
@@ -140,7 +145,7 @@ export const AnalyticsView: React.FC = () => {
             <div className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento border border-hairline-light dark:border-hairline-dark">
               <span className="text-xs text-muted font-medium">Class CZ (Long Tail)</span>
               <div className="text-xl font-bold font-mono text-muted mt-1">
-                {rawAbc?.matrix?.CZ?.count != null
+                {rawAbc?.matrix?.CZ?.count != null && !isNaN(Number(rawAbc.matrix.CZ.count))
                   ? `${Number(rawAbc.matrix.CZ.count)} SKUs`
                   : '—'}
               </div>

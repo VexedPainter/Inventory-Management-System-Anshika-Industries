@@ -211,3 +211,30 @@ def test_groq_model_not_found_exception_sets_reason(db):
             assert res["mode"] == "offline"
             assert res["reason"] == "model not found"
             assert res["proposed_action"] is not None
+
+def test_no_key_fallback_stock_valuation(db):
+    """When no API key is provided, 'stock valuation' routes to business_kpis in offline mode."""
+    with patch.dict("os.environ", {}, clear=True):
+        res = run_chat_agent("what is our current stock valuation?", db)
+        assert res["mode"] == "offline"
+        assert res["reason"] == "GROQ_API_KEY is not configured in .env"
+        assert "business_kpis" in [tc["tool"] for tc in res["tool_calls"]]
+        assert "Total Stock Valuation" in res["response"]
+
+def test_no_key_fallback_asset_turns(db):
+    """When no API key is provided, 'asset turns' routes to business_kpis in offline mode."""
+    with patch.dict("os.environ", {}, clear=True):
+        res = run_chat_agent("calculate asset turns and efficiency", db)
+        assert res["mode"] == "offline"
+        assert res["reason"] == "GROQ_API_KEY is not configured in .env"
+        assert "business_kpis" in [tc["tool"] for tc in res["tool_calls"]]
+        assert "Asset / Inventory Turns" in res["response"]
+
+def test_no_key_fallback_inventory_value(db):
+    """When no API key is provided, 'inventory value' routes to business_kpis in offline mode."""
+    with patch.dict("os.environ", {}, clear=True):
+        res = run_chat_agent("tell me our total inventory value", db)
+        assert res["mode"] == "offline"
+        assert res["reason"] == "GROQ_API_KEY is not configured in .env"
+        assert "business_kpis" in [tc["tool"] for tc in res["tool_calls"]]
+        assert "Total Stock Valuation" in res["response"]
