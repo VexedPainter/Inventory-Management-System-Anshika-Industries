@@ -30,7 +30,7 @@ from database import (
 )
 from preventive_intelligence import (
     compute_item_status, calculate_forecast, compute_suggested_reorder_level,
-    compute_items_status_map, compute_abc_xyz_classification
+    compute_items_status_map, compute_abc_xyz_classification, compute_business_kpis
 )
 from business_reports import compute_owner_summary_metrics
 
@@ -833,6 +833,8 @@ def execute_tool(tool_name: str, args: dict, db: Session) -> dict:
             return execute_owner_summary(db)
         elif tool_name == "abc_xyz_analysis":
             return compute_abc_xyz_classification(db)
+        elif tool_name == "business_kpis":
+            return compute_business_kpis(db)
         elif tool_name == "create_draft_po":
             return execute_create_draft_po(db, args.get("supplier", ""), args.get("lines", []))
         elif tool_name == "stock_out":
@@ -1105,6 +1107,24 @@ def run_fallback_agent(user_message: str, db: Session, user: str = "storekeeper"
             return {"response": narrative, "model": "grounded-fallback-agent", "tokens_used": 120, "tool_calls": tool_calls, "proposed_action": None, "status": "success"}
         except Exception as e:
             logger.error(f"ABC-XYZ fallback error: {e}")
+
+    # 7d. READ: Stock Valuation / Asset Turns / Inventory Value
+    if any(k in q for k in ["stock valuation", "asset turns", "asset turn", "inventory value", "inventory valuation", "inventory turnover", "working capital"]):
+        data = compute_business_kpis(db)
+        tool_calls.append({"tool": "business_kpis", "args": {}})
+        total_val = data.get("working_capital_tied_up") or data.get("total_inventory_value") or 0.0
+        turnover = data.get("inventory_turnover", 0.0)
+        days = data.get("days_of_inventory", 0.0)
+        fill_rate = data.get("fill_rate_pct", 0.0)
+        lines = [
+            f"**Inventory Valuation & Asset Efficiency Telemetry:**\n",
+            f"- **Total Stock Valuation**: ₹{total_val:,.2f}",
+            f"- **Asset / Inventory Turns**: **{turnover:.2f}x** per annum",
+            f"- **Days of Inventory (DSI)**: **{days:.1f} days**",
+            f"- **Order Fill Rate**: **{fill_rate:.1f}%**"
+        ]
+        narrative = "\n".join(lines)
+        return {"response": narrative, "model": "grounded-fallback-agent", "tokens_used": 115, "tool_calls": tool_calls, "proposed_action": None, "status": "success"}
 
     # 8. READ: Open Purchase Orders
     if any(k in q for k in ["open po", "pending delivery", "purchase order list", "procurement list", "open purchase orders", "list all open"]):

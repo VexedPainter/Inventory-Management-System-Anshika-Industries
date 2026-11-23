@@ -120,7 +120,9 @@ export const AnalyticsView: React.FC = () => {
             <div className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento border border-hairline-light dark:border-hairline-dark">
               <span className="text-xs text-muted font-medium">Class AX / AY (Top Spares)</span>
               <div className="text-xl font-bold font-mono text-positive mt-1">
-                {rawAbc?.matrix ? `${(rawAbc.matrix.AX || []).length + (rawAbc.matrix.AY || []).length} SKUs` : '—'}
+                {rawAbc?.matrix?.AX != null || rawAbc?.matrix?.AY != null
+                  ? `${(Number(rawAbc?.matrix?.AX?.count || 0) + Number(rawAbc?.matrix?.AY?.count || 0))} SKUs`
+                  : '—'}
               </div>
               <p className="text-[11px] text-muted mt-1">High revenue value + stable predictable consumption run rate.</p>
             </div>
@@ -128,7 +130,9 @@ export const AnalyticsView: React.FC = () => {
             <div className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento border border-hairline-light dark:border-hairline-dark">
               <span className="text-xs text-muted font-medium">Class AZ (Critical Risk)</span>
               <div className="text-xl font-bold font-mono text-negative mt-1">
-                {rawAbc?.matrix ? `${(rawAbc.matrix.AZ || []).length} SKUs` : '—'}
+                {rawAbc?.matrix?.AZ?.count != null
+                  ? `${Number(rawAbc.matrix.AZ.count)} SKUs`
+                  : '—'}
               </div>
               <p className="text-[11px] text-muted mt-1">High revenue impact + volatile unpredictable factory demand spikes.</p>
             </div>
@@ -136,7 +140,9 @@ export const AnalyticsView: React.FC = () => {
             <div className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento border border-hairline-light dark:border-hairline-dark">
               <span className="text-xs text-muted font-medium">Class CZ (Long Tail)</span>
               <div className="text-xl font-bold font-mono text-muted mt-1">
-                {rawAbc?.matrix ? `${(rawAbc.matrix.CZ || []).length} SKUs` : '—'}
+                {rawAbc?.matrix?.CZ?.count != null
+                  ? `${Number(rawAbc.matrix.CZ.count)} SKUs`
+                  : '—'}
               </div>
               <p className="text-[11px] text-muted mt-1">Low revenue consumption + erratic sporadic demand.</p>
             </div>

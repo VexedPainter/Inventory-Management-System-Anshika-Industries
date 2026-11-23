@@ -63,3 +63,24 @@ def test_direct_summarise_this_week_mapping(db):
     assert res["status"] == "success"
     tool_names = [tc["tool"] for tc in res.get("tool_calls", [])]
     assert "owner_summary" in tool_names
+
+def test_direct_stock_valuation_mapping(db):
+    res = run_fallback_agent("what is our current stock valuation?", db)
+    assert res["status"] == "success"
+    tool_names = [tc["tool"] for tc in res.get("tool_calls", [])]
+    assert "business_kpis" in tool_names
+    assert "Total Stock Valuation" in res["response"]
+
+def test_direct_asset_turns_mapping(db):
+    res = run_fallback_agent("calculate asset turns and efficiency", db)
+    assert res["status"] == "success"
+    tool_names = [tc["tool"] for tc in res.get("tool_calls", [])]
+    assert "business_kpis" in tool_names
+    assert "Asset / Inventory Turns" in res["response"]
+
+def test_direct_inventory_value_mapping(db):
+    res = run_fallback_agent("tell me our total inventory value", db)
+    assert res["status"] == "success"
+    tool_names = [tc["tool"] for tc in res.get("tool_calls", [])]
+    assert "business_kpis" in tool_names
+    assert "Total Stock Valuation" in res["response"]
