@@ -486,7 +486,12 @@ function switchTab(tabName) {
         fetchAnalytics();
         fetchAnomalies();
     } else if (tabName === 'audit') {
-        fetchAuditTrail();
+        const curRole = (state.currentUser?.role || '').toLowerCase();
+        if (curRole === 'admin' || curRole === 'manager') {
+            fetchAuditTrail();
+        } else {
+            switchTab('dashboard');
+        }
     }
 }
 

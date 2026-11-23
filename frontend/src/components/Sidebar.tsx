@@ -36,6 +36,7 @@ export type TabKey =
   | 'audit'
   | 'users'
   | 'business-impact'
+  | 'settings'
   | 'dev-motion';
 
 interface NavItem {
@@ -59,6 +60,7 @@ const NAV_ITEMS: NavItem[] = [
   { key: 'audit', label: 'Audit Trail', icon: ShieldAlert, roles: ['admin', 'manager'] },
   { key: 'users', label: 'User Accounts', icon: UserCog, roles: ['admin'] },
   { key: 'business-impact', label: 'Business Impact', icon: Calculator, roles: ['admin', 'manager'] },
+  { key: 'settings', label: 'Settings', icon: Settings, roles: ['admin', 'manager', 'storekeeper'] },
   { key: 'dev-motion', label: 'Motion System (/dev/motion)', icon: Activity, roles: ['admin', 'manager', 'storekeeper'] },
 ];
 

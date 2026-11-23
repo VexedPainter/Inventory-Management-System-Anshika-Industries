@@ -1,16 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import {
-  Sparkles,
   RefreshCw,
   Plus,
   Trash2,
   X,
-  Sliders,
-  Layers,
   ArrowRight,
-  ShieldCheck,
-  CheckCircle2,
+  Sparkles,
 } from 'lucide-react';
 import {
   AreaChart,
@@ -27,6 +23,7 @@ import {
 import { CountUp } from '../components/CountUp';
 import { Skeleton } from '../components/Skeleton';
 import { Reveal, CUBIC_EASE_OUT } from '../components/Reveal';
+import { AniOrb, OrbExpression } from '../components/AiOrb';
 
 const SAMPLE_CHART_DATA = [
   { day: 'Mon', inward: 40, outward: 24 },
@@ -45,6 +42,11 @@ const GAUGE_DATA = [
 
 export const DevMotionView: React.FC = () => {
   const shouldReduceMotion = useReducedMotion();
+
+  // AniOrb Showcase state
+  const [orbDemoExpr, setOrbDemoExpr] = useState<OrbExpression>('idle');
+  const [orbDemoSpeech, setOrbDemoSpeech] = useState<string | null>("I'm Ani, your inventory AI.");
+  const [orbDemoSize, setOrbDemoSize] = useState<number>(56);
 
   // Pattern 1: Skeleton to Reveal simulation
   const [isSimulatingRoute, setIsSimulatingRoute] = useState(false);
@@ -142,6 +144,97 @@ export const DevMotionView: React.FC = () => {
           </div>
         </div>
       </Reveal>
+
+      {/* ==================================================================== */}
+      {/* 0. ANISKA AI ORB INTERACTIVE DEMO (Pure CSS + Framer-Motion)         */}
+      {/* ==================================================================== */}
+      <div className="bg-card-light dark:bg-card-dark rounded-card p-6 shadow-bento border border-hairline-light dark:border-hairline-dark space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-semibold text-ink-light dark:text-ink-dark flex items-center gap-2">
+              <Sparkles size={16} className="text-[#3328E8] dark:text-[#8E86FF]" />
+              <span>&lt;AniOrb /&gt; Pure CSS + Framer-Motion Interactive Inspector</span>
+            </h3>
+            <p className="text-xs text-muted mt-0.5">
+              56px sphere • 3D radial highlights & cyan rim • breathing outer ring • 3-6s eye blinking & cursor tracking • 6 expression states
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted">Size:</span>
+            {[28, 40, 56, 72].map(s => (
+              <button
+                key={s}
+                onClick={() => setOrbDemoSize(s)}
+                className={`px-2 py-0.5 text-xs font-mono rounded-pill ${
+                  orbDemoSize === s
+                    ? 'bg-[#3328E8] text-white'
+                    : 'bg-black/5 dark:bg-white/10 text-muted'
+                }`}
+              >
+                {s}px
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Live Orb Presentation Stage */}
+        <div className="py-10 bg-canvas-light/60 dark:bg-black/20 rounded-tile flex flex-col items-center justify-center relative min-h-[170px] border border-hairline-light dark:border-hairline-dark">
+          <AniOrb
+            size={orbDemoSize}
+            expression={orbDemoExpr}
+            speechText={orbDemoSpeech}
+            speechChips={
+              orbDemoSpeech
+                ? [
+                    { label: 'Draft POs', action: () => alert('Action: Draft POs triggered') },
+                    { label: 'Dismiss', action: () => setOrbDemoSpeech(null) },
+                  ]
+                : undefined
+            }
+            onDismissSpeech={() => setOrbDemoSpeech(null)}
+            bubblePosition="top"
+          />
+        </div>
+
+        {/* Expression State Controls */}
+        <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-hairline-light dark:border-hairline-dark">
+          <span className="text-xs text-muted font-medium mr-1">Expressions:</span>
+          {(['idle', 'speaking', 'thinking', 'sleepy', 'alert', 'success'] as OrbExpression[]).map(expr => (
+            <motion.button
+              key={expr}
+              whileTap={{ scale: 0.98 }}
+              onClick={() => {
+                setOrbDemoExpr(expr);
+                if (expr === 'speaking') {
+                  setOrbDemoSpeech("I'm Ani, your inventory AI.");
+                } else if (expr === 'alert') {
+                  setOrbDemoSpeech('CRITICAL: 5 items below reorder buffer!');
+                } else if (expr === 'thinking') {
+                  setOrbDemoSpeech(null);
+                } else if (expr === 'success') {
+                  setOrbDemoSpeech('Reorder approval completed successfully! ✨');
+                } else if (expr === 'sleepy') {
+                  setOrbDemoSpeech(null);
+                }
+              }}
+              className={`px-3 py-1.5 rounded-pill text-xs font-semibold capitalize transition-all ${
+                orbDemoExpr === expr
+                  ? 'bg-ink-light dark:bg-ink-dark text-white shadow-sm'
+                  : 'bg-canvas-light dark:bg-black/20 text-muted hover:text-ink-light dark:hover:text-ink-dark border border-hairline-light dark:border-hairline-dark'
+              }`}
+            >
+              {expr}
+            </motion.button>
+          ))}
+          <motion.button
+            whileTap={{ scale: 0.98 }}
+            onClick={() => setOrbDemoSpeech(prev => (prev ? null : "I'm Ani, your inventory AI."))}
+            className="ml-auto text-xs text-sage font-medium hover:underline"
+          >
+            {orbDemoSpeech ? 'Hide Speech Bubble' : 'Show Speech Bubble'}
+          </motion.button>
+        </div>
+      </div>
 
       {/* ==================================================================== */}
       {/* 1. ROUTE CHANGE SKELETON & STAGGER REVEAL DEMO                      */}

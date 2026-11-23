@@ -24,8 +24,9 @@ import {
 } from 'recharts';
 import { apiFetch } from '../api/client';
 import { useAuth } from '../context/AuthContext';
+import { useOrb } from '../context/OrbContext';
 import { CountUp } from '../components/CountUp';
-import { AiOrb } from '../components/AiOrb';
+import { AniOrb } from '../components/AiOrb';
 import { Reveal } from '../components/Reveal';
 import { Skeleton } from '../components/Skeleton';
 
@@ -41,6 +42,7 @@ export const DashboardView: React.FC<DashboardProps> = ({
   onOpenQuickPO,
 }) => {
   const { user } = useAuth();
+  const { onDashboardReady, openChat } = useOrb();
   const [minSkeletonElapsed, setMinSkeletonElapsed] = useState(false);
 
   // Guarantee skeletons stay at least 450ms on route change
@@ -78,6 +80,13 @@ export const DashboardView: React.FC<DashboardProps> = ({
     queryFn: () => apiFetch('/api/customers'),
     staleTime: 60000,
   });
+
+  // Notify orb director once dashboard is loaded and skeletons cleared
+  useEffect(() => {
+    if (!dashLoading && minSkeletonElapsed && dashData) {
+      onDashboardReady(dashData);
+    }
+  }, [dashLoading, minSkeletonElapsed, dashData, onDashboardReady]);
 
   const showSkeleton = dashLoading || !minSkeletonElapsed;
 
@@ -162,8 +171,21 @@ export const DashboardView: React.FC<DashboardProps> = ({
             whileHover={{ y: -4 }}
             transition={{ duration: 0.2 }}
             onClick={() => onNavigateTab('inventory')}
-            className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento hover:shadow-bento-hover border border-hairline-light dark:border-hairline-dark cursor-pointer flex flex-col justify-between transition-shadow h-full"
+            className="group relative bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento hover:shadow-bento-hover border border-hairline-light dark:border-hairline-dark cursor-pointer flex flex-col justify-between transition-shadow h-full"
           >
+            {/* Ask Ani on hover button */}
+            <button
+              type="button"
+              onClick={e => {
+                e.stopPropagation();
+                openChat('Analyze our total stock valuation breakdown and asset turns');
+              }}
+              className="opacity-0 group-hover:opacity-100 transition-opacity absolute top-3 right-3 text-[10px] font-semibold bg-white/90 dark:bg-black/90 text-sage dark:text-sage border border-sage/30 px-2.5 py-1 rounded-pill shadow-sm flex items-center gap-1 z-20"
+            >
+              <Sparkles size={11} />
+              <span>Ask Ani</span>
+            </button>
+
             <div className="flex items-center justify-between">
               <span className="text-xs text-muted font-medium">Stock value</span>
               <div className="w-8 h-8 rounded-full bg-sage/10 text-sage flex items-center justify-center">
@@ -197,14 +219,29 @@ export const DashboardView: React.FC<DashboardProps> = ({
           </motion.div>
         </Reveal>
 
-        {/* Card 2: Low stock */}
+        {/* Card 2: Low stock (Target of Ani glide choreo) */}
         <Reveal index={1}>
           <motion.div
+            id="bento-low-stock"
+            data-card="low-stock"
             whileHover={{ y: -4 }}
             transition={{ duration: 0.2 }}
             onClick={() => onNavigateTab('inventory')}
-            className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento hover:shadow-bento-hover border border-hairline-light dark:border-hairline-dark cursor-pointer flex flex-col justify-between transition-shadow h-full"
+            className="group relative bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento hover:shadow-bento-hover border border-hairline-light dark:border-hairline-dark cursor-pointer flex flex-col justify-between transition-shadow h-full"
           >
+            {/* Ask Ani on hover button */}
+            <button
+              type="button"
+              onClick={e => {
+                e.stopPropagation();
+                openChat('Which critical SKUs are currently below their reorder buffer?');
+              }}
+              className="opacity-0 group-hover:opacity-100 transition-opacity absolute top-3 right-3 text-[10px] font-semibold bg-white/90 dark:bg-black/90 text-warning border border-warning/30 px-2.5 py-1 rounded-pill shadow-sm flex items-center gap-1 z-20"
+            >
+              <Sparkles size={11} />
+              <span>Ask Ani</span>
+            </button>
+
             <div className="flex items-center justify-between">
               <span className="text-xs text-muted font-medium">Low stock</span>
               <div className="w-8 h-8 rounded-full bg-warning/10 text-warning flex items-center justify-center">
@@ -237,8 +274,21 @@ export const DashboardView: React.FC<DashboardProps> = ({
             whileHover={{ y: -4 }}
             transition={{ duration: 0.2 }}
             onClick={() => onNavigateTab('inventory')}
-            className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento hover:shadow-bento-hover border border-hairline-light dark:border-hairline-dark cursor-pointer flex flex-col justify-between transition-shadow h-full"
+            className="group relative bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento hover:shadow-bento-hover border border-hairline-light dark:border-hairline-dark cursor-pointer flex flex-col justify-between transition-shadow h-full"
           >
+            {/* Ask Ani on hover button */}
+            <button
+              type="button"
+              onClick={e => {
+                e.stopPropagation();
+                openChat('List all completely out of stock items and procurement lead times');
+              }}
+              className="opacity-0 group-hover:opacity-100 transition-opacity absolute top-3 right-3 text-[10px] font-semibold bg-white/90 dark:bg-black/90 text-negative border border-negative/30 px-2.5 py-1 rounded-pill shadow-sm flex items-center gap-1 z-20"
+            >
+              <Sparkles size={11} />
+              <span>Ask Ani</span>
+            </button>
+
             <div className="flex items-center justify-between">
               <span className="text-xs text-muted font-medium">Out of stock</span>
               <div className="w-8 h-8 rounded-full bg-negative/10 text-negative flex items-center justify-center">
@@ -270,11 +320,24 @@ export const DashboardView: React.FC<DashboardProps> = ({
             whileHover={{ y: -4 }}
             transition={{ duration: 0.2 }}
             onClick={() => onNavigateTab('procurement')}
-            className="rounded-card p-5 shadow-bento hover:shadow-bento-hover cursor-pointer flex flex-col justify-between text-white relative overflow-hidden h-full"
+            className="group relative rounded-card p-5 shadow-bento hover:shadow-bento-hover cursor-pointer flex flex-col justify-between text-white relative overflow-hidden h-full"
             style={{
               background: 'linear-gradient(135deg, #6F8F7C 0%, #4F6E5C 100%)',
             }}
           >
+            {/* Ask Ani on hover button */}
+            <button
+              type="button"
+              onClick={e => {
+                e.stopPropagation();
+                openChat('Summarize all pending purchase orders and vendor expected dates');
+              }}
+              className="opacity-0 group-hover:opacity-100 transition-opacity absolute top-3 right-3 text-[10px] font-semibold bg-white/20 hover:bg-white/30 text-white px-2.5 py-1 rounded-pill shadow-sm flex items-center gap-1 z-20"
+            >
+              <Sparkles size={11} />
+              <span>Ask Ani</span>
+            </button>
+
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-white/80">Pending POs</span>
               <span className="text-[10px] font-semibold bg-white/20 text-white px-2 py-0.5 rounded-full">
@@ -306,7 +369,7 @@ export const DashboardView: React.FC<DashboardProps> = ({
           <motion.div
             whileHover={{ y: -4 }}
             transition={{ duration: 0.2 }}
-            className="bg-card-light dark:bg-card-dark rounded-card p-6 shadow-bento hover:shadow-bento-hover border border-hairline-light dark:border-hairline-dark flex flex-col justify-between relative overflow-hidden h-full"
+            className="group relative bg-card-light dark:bg-card-dark rounded-card p-6 shadow-bento hover:shadow-bento-hover border border-hairline-light dark:border-hairline-dark flex flex-col justify-between relative overflow-hidden h-full"
           >
             {/* Header & Badges */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
@@ -324,17 +387,18 @@ export const DashboardView: React.FC<DashboardProps> = ({
                 </p>
               </div>
 
-              {/* AI Orb sitting on the card as featured in reference screenshot! */}
+              {/* Embedded Ani Orb on card header with click-to-chat */}
               <div
-                onClick={() => onOpenCopilot('Explain current stock movement trends')}
+                onClick={() => openChat('Explain current stock movement trends and velocity')}
                 className="cursor-pointer"
+                title="Click Ani to inspect movement telemetry"
               >
-                <AiOrb size={46} interactive showGreeting />
+                <AniOrb size={44} interactive />
               </div>
             </div>
 
             {/* Floating metrics chip */}
-            <div className="flex items-center gap-3 mb-2">
+            <div className="flex items-center gap-3 mb-2 flex-wrap">
               <div className="bg-canvas-light dark:bg-black/20 rounded-pill px-3 py-1 flex items-center gap-2 text-xs border border-hairline-light dark:border-hairline-dark">
                 <span className="text-muted">Turnover</span>
                 <span className="font-semibold text-ink-light dark:text-ink-dark font-mono">1.7x</span>
@@ -406,8 +470,20 @@ export const DashboardView: React.FC<DashboardProps> = ({
           <motion.div
             whileHover={{ y: -4 }}
             transition={{ duration: 0.2 }}
-            className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento hover:shadow-bento-hover border border-hairline-light dark:border-hairline-dark flex flex-col justify-between h-full"
+            className="group relative bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento hover:shadow-bento-hover border border-hairline-light dark:border-hairline-dark flex flex-col justify-between h-full"
           >
+            <button
+              type="button"
+              onClick={e => {
+                e.stopPropagation();
+                openChat('How is our warehouse SLA / fill rate calculated?');
+              }}
+              className="opacity-0 group-hover:opacity-100 transition-opacity absolute top-3 right-3 text-[10px] font-semibold bg-white/90 dark:bg-black/90 text-sage border border-sage/30 px-2 py-0.5 rounded-pill shadow-sm flex items-center gap-1 z-20"
+            >
+              <Sparkles size={11} />
+              <span>Ask Ani</span>
+            </button>
+
             <div>
               <h3 className="text-sm font-semibold text-ink-light dark:text-ink-dark">
                 Fill rate
@@ -459,7 +535,7 @@ export const DashboardView: React.FC<DashboardProps> = ({
           <motion.div
             whileHover={{ y: -4 }}
             transition={{ duration: 0.2 }}
-            className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento hover:shadow-bento-hover border border-hairline-light dark:border-hairline-dark flex flex-col justify-between h-full"
+            className="group relative bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento hover:shadow-bento-hover border border-hairline-light dark:border-hairline-dark flex flex-col justify-between h-full"
           >
             <div className="flex flex-col items-center text-center">
               <div className="w-16 h-16 rounded-full bg-sage/20 border-2 border-sage/40 flex items-center justify-center text-sage text-xl font-bold mb-3 shadow-sm">
@@ -510,8 +586,20 @@ export const DashboardView: React.FC<DashboardProps> = ({
           <motion.div
             whileHover={{ y: -4 }}
             transition={{ duration: 0.2 }}
-            className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento hover:shadow-bento-hover border border-hairline-light dark:border-hairline-dark flex flex-col justify-between h-full"
+            className="group relative bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento hover:shadow-bento-hover border border-hairline-light dark:border-hairline-dark flex flex-col justify-between h-full"
           >
+            <button
+              type="button"
+              onClick={e => {
+                e.stopPropagation();
+                openChat('Prioritize these reorder suggestions based on vendor lead times');
+              }}
+              className="opacity-0 group-hover:opacity-100 transition-opacity absolute top-3 right-16 text-[10px] font-semibold bg-white/90 dark:bg-black/90 text-sage border border-sage/30 px-2 py-0.5 rounded-pill shadow-sm flex items-center gap-1 z-20"
+            >
+              <Sparkles size={11} />
+              <span>Ask Ani</span>
+            </button>
+
             <div>
               <div className="flex items-center justify-between mb-3">
                 <div>
@@ -577,8 +665,20 @@ export const DashboardView: React.FC<DashboardProps> = ({
           <motion.div
             whileHover={{ y: -4 }}
             transition={{ duration: 0.2 }}
-            className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento hover:shadow-bento-hover border border-hairline-light dark:border-hairline-dark flex flex-col justify-between h-full"
+            className="group relative bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento hover:shadow-bento-hover border border-hairline-light dark:border-hairline-dark flex flex-col justify-between h-full"
           >
+            <button
+              type="button"
+              onClick={e => {
+                e.stopPropagation();
+                openChat('Analyze our overdue receivables and customer payment terms');
+              }}
+              className="opacity-0 group-hover:opacity-100 transition-opacity absolute top-3 right-16 text-[10px] font-semibold bg-white/90 dark:bg-black/90 text-sage border border-sage/30 px-2 py-0.5 rounded-pill shadow-sm flex items-center gap-1 z-20"
+            >
+              <Sparkles size={11} />
+              <span>Ask Ani</span>
+            </button>
+
             <div>
               <div className="flex items-center justify-between mb-3">
                 <div>
@@ -642,7 +742,7 @@ export const DashboardView: React.FC<DashboardProps> = ({
           <motion.div
             whileHover={{ y: -4 }}
             transition={{ duration: 0.2 }}
-            className="rounded-card p-5 shadow-bento flex flex-col justify-between text-white relative overflow-hidden h-full"
+            className="group relative rounded-card p-5 shadow-bento flex flex-col justify-between text-white relative overflow-hidden h-full"
             style={{
               background: 'linear-gradient(135deg, #6F8F7C 0%, #4F6E5C 100%)',
             }}
@@ -662,10 +762,10 @@ export const DashboardView: React.FC<DashboardProps> = ({
             <div className="mt-4">
               <motion.button
                 whileTap={{ scale: 0.98 }}
-                onClick={() => onOpenCopilot('Run automated stock health check and draft pending POs')}
+                onClick={() => openChat('Run automated stock safety scan and draft replenishment POs')}
                 className="sweep-hover w-full py-2.5 px-4 bg-ink-light text-white text-xs font-medium rounded-pill shadow-sm transition-all flex items-center justify-center gap-2"
               >
-                <Sparkles size={14} className="text-orb-cyan" />
+                <Sparkles size={14} className="text-[#8FE3FF]" />
                 <span>Run auto-reorder</span>
               </motion.button>
             </div>
