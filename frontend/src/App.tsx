@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -6,24 +6,28 @@ import { OrbProvider, useOrb } from './context/OrbContext';
 import { Sidebar, TabKey } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
 import { FloatingAniOrb } from './components/FloatingAniOrb';
-import { DashboardView } from './views/DashboardView';
-import { InventoryCatalogView } from './views/InventoryCatalogView';
-import { MovementsView } from './views/MovementsView';
-import { ProcurementView } from './views/ProcurementView';
-import { SalesView } from './views/SalesView';
-import { CustomersView } from './views/CustomersView';
-import { SuppliersView } from './views/SuppliersView';
-import { ReportsView } from './views/ReportsView';
-import { AnalyticsView } from './views/AnalyticsView';
-import { AiCopilotPageView } from './views/AiCopilotPageView';
-import { AuditView } from './views/AuditView';
-import { UsersView } from './views/UsersView';
-import { SettingsView } from './views/SettingsView';
-import { BusinessImpactView } from './views/BusinessImpactView';
-import { DevMotionView } from './views/DevMotionView';
 import { AskAniPanel } from './views/AskAniPanel';
 import { LoginView } from './views/LoginView';
+import { ForcedPasswordModal } from './components/ForcedPasswordModal';
+import { Skeleton } from './components/Skeleton';
 import { ExternalLink } from 'lucide-react';
+
+// Code-split route components for optimized initial load performance
+const DashboardView = lazy(() => import('./views/DashboardView').then(m => ({ default: m.DashboardView })));
+const InventoryCatalogView = lazy(() => import('./views/InventoryCatalogView').then(m => ({ default: m.InventoryCatalogView })));
+const MovementsView = lazy(() => import('./views/MovementsView').then(m => ({ default: m.MovementsView })));
+const ProcurementView = lazy(() => import('./views/ProcurementView').then(m => ({ default: m.ProcurementView })));
+const SalesView = lazy(() => import('./views/SalesView').then(m => ({ default: m.SalesView })));
+const CustomersView = lazy(() => import('./views/CustomersView').then(m => ({ default: m.CustomersView })));
+const SuppliersView = lazy(() => import('./views/SuppliersView').then(m => ({ default: m.SuppliersView })));
+const ReportsView = lazy(() => import('./views/ReportsView').then(m => ({ default: m.ReportsView })));
+const AnalyticsView = lazy(() => import('./views/AnalyticsView').then(m => ({ default: m.AnalyticsView })));
+const AiCopilotPageView = lazy(() => import('./views/AiCopilotPageView').then(m => ({ default: m.AiCopilotPageView })));
+const AuditView = lazy(() => import('./views/AuditView').then(m => ({ default: m.AuditView })));
+const UsersView = lazy(() => import('./views/UsersView').then(m => ({ default: m.UsersView })));
+const SettingsView = lazy(() => import('./views/SettingsView').then(m => ({ default: m.SettingsView })));
+const BusinessImpactView = lazy(() => import('./views/BusinessImpactView').then(m => ({ default: m.BusinessImpactView })));
+const DevMotionView = lazy(() => import('./views/DevMotionView').then(m => ({ default: m.DevMotionView })));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -34,8 +38,24 @@ const queryClient = new QueryClient({
   },
 });
 
+const RouteFallback: React.FC = () => (
+  <div className="space-y-6 animate-pulse" role="status" aria-label="Loading view">
+    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <Skeleton className="h-9 w-64 rounded-2xl" />
+      <Skeleton className="h-9 w-32 rounded-full" />
+    </div>
+    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <Skeleton className="h-28 rounded-3xl" />
+      <Skeleton className="h-28 rounded-3xl" />
+      <Skeleton className="h-28 rounded-3xl" />
+      <Skeleton className="h-28 rounded-3xl" />
+    </div>
+    <Skeleton className="h-96 rounded-3xl" />
+  </div>
+);
+
 const MainShell: React.FC = () => {
-  const { user } = useAuth();
+  const { user, showForcedPasswordModal } = useAuth();
   const {
     isChatOpen,
     chatQuery,
@@ -77,23 +97,27 @@ const MainShell: React.FC = () => {
   }
 
   const role = user.role || 'storekeeper';
+  const mustChangePwd = Boolean(user.must_change_password || showForcedPasswordModal);
 
   return (
     <div className="min-h-screen bg-canvas-light dark:bg-canvas-dark text-ink-light dark:text-ink-dark transition-colors duration-300 relative overflow-x-hidden">
-      {/* Floating Slim Sidebar (64px wide, 16px from edges) */}
+      {/* Forced Password Change Modal */}
+      {mustChangePwd && <ForcedPasswordModal />}
+
+      {/* Navigation: Desktop left slim bar + Mobile bottom tab bar */}
       <Sidebar
         activeTab={activeTab}
         onTabChange={(tab) => setActiveTab(tab)}
         onOpenSettings={() => setActiveTab('settings')}
       />
 
-      {/* Main Content Area */}
+      {/* Main Content Area (Fluid responsive: 390, 768, 1024, 1440) */}
       <motion.div
         animate={{
           marginRight: !shouldReduceMotion && windowWidth >= 1024 && isChatOpen ? 388 : 0,
         }}
         transition={{ type: 'spring', damping: 28, stiffness: 220 }}
-        className="pl-24 pr-6 sm:pr-8 pt-6 pb-16 min-h-screen flex flex-col justify-between transition-all"
+        className="pl-4 md:pl-24 pr-4 md:pr-8 pt-4 md:pt-6 pb-28 md:pb-16 min-h-screen flex flex-col justify-between transition-all"
       >
         <div className="max-w-[1480px] w-full mx-auto space-y-6">
           {/* Top Bar (Search, Role indicator, Quick Actions, Ask Ani pill) */}
@@ -103,50 +127,54 @@ const MainShell: React.FC = () => {
             onAskAni={(q) => openChat(q)}
           />
 
-          {/* Page Route View with Motion Transitions */}
+          {/* Page Route View with Motion Transitions and Code-Split Suspense */}
           <AnimatePresence mode="wait">
             <motion.main
               key={activeTab}
+              role="main"
+              aria-label={`${activeTab} view`}
               initial={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: 16, filter: 'blur(6px)' }}
               animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, y: 0, filter: 'blur(0px)' }}
               exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, filter: 'blur(6px)' }}
               transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
               className="w-full"
             >
-              {activeTab === 'dashboard' && (
-                <DashboardView
-                  onNavigateTab={(t) => setActiveTab(t)}
-                  onOpenCopilot={(q) => openChat(q)}
-                />
-              )}
+              <Suspense fallback={<RouteFallback />}>
+                {activeTab === 'dashboard' && (
+                  <DashboardView
+                    onNavigateTab={(t) => setActiveTab(t)}
+                    onOpenCopilot={(q) => openChat(q)}
+                  />
+                )}
 
-              {activeTab === 'inventory' && <InventoryCatalogView />}
+                {activeTab === 'inventory' && <InventoryCatalogView />}
 
-              {activeTab === 'movements' && <MovementsView />}
+                {activeTab === 'movements' && <MovementsView />}
 
-              {activeTab === 'procurement' && <ProcurementView />}
+                {activeTab === 'procurement' && <ProcurementView />}
 
-              {activeTab === 'sales' && <SalesView />}
+                {activeTab === 'sales' && <SalesView />}
 
-              {activeTab === 'customers' && <CustomersView />}
+                {activeTab === 'customers' && <CustomersView />}
 
-              {activeTab === 'suppliers' && <SuppliersView />}
+                {activeTab === 'suppliers' && <SuppliersView />}
 
-              {activeTab === 'reports' && <ReportsView />}
+                {activeTab === 'reports' && <ReportsView />}
 
-              {activeTab === 'analytics' && <AnalyticsView />}
+                {activeTab === 'analytics' && <AnalyticsView />}
 
-              {activeTab === 'ai-copilot' && <AiCopilotPageView />}
+                {activeTab === 'ai-copilot' && <AiCopilotPageView />}
 
-              {activeTab === 'audit' && (role === 'admin' || role === 'manager') && <AuditView />}
+                {activeTab === 'audit' && (role === 'admin' || role === 'manager') && <AuditView />}
 
-              {activeTab === 'users' && role === 'admin' && <UsersView />}
+                {activeTab === 'users' && role === 'admin' && <UsersView />}
 
-              {activeTab === 'business-impact' && (role === 'admin' || role === 'manager') && <BusinessImpactView />}
+                {activeTab === 'business-impact' && (role === 'admin' || role === 'manager') && <BusinessImpactView />}
 
-              {activeTab === 'settings' && <SettingsView />}
+                {activeTab === 'settings' && <SettingsView />}
 
-              {activeTab === 'dev-motion' && <DevMotionView />}
+                {activeTab === 'dev-motion' && <DevMotionView />}
+              </Suspense>
             </motion.main>
           </AnimatePresence>
         </div>

@@ -24,7 +24,7 @@ export const FloatingAniOrb: React.FC = () => {
   // When docked: render bottom-right pill
   if (stage === 'docked') {
     return (
-      <div className="fixed bottom-6 right-6 z-40 flex items-center gap-2 select-none">
+      <div className="fixed bottom-20 md:bottom-6 right-4 md:right-6 z-40 flex items-center gap-2 select-none">
         {/* Reduce AI popups quick toggle */}
         <AnimatePresence>
           {showSettings && (
