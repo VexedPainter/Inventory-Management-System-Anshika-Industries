@@ -30,12 +30,22 @@ export async function apiFetch<T = any>(endpoint: string, options: ApiFetchOptio
   });
 
   if (res.status === 401) {
-    sessionStorage.removeItem('ss_token');
-    sessionStorage.removeItem('ss_user');
-    localStorage.removeItem('ss_token');
-    localStorage.removeItem('ss_user');
-    window.dispatchEvent(new Event('auth-unauthorized'));
-    throw new Error('Authentication required');
+    if (!endpoint.includes('/login')) {
+      sessionStorage.removeItem('ss_token');
+      sessionStorage.removeItem('ss_user');
+      localStorage.removeItem('ss_token');
+      localStorage.removeItem('ss_user');
+      window.dispatchEvent(new Event('auth-unauthorized'));
+      throw new Error('Authentication required');
+    }
+    let errDetail = 'Invalid username or password';
+    try {
+      const errJson = await res.json();
+      errDetail = errJson.detail || errJson.message || errDetail;
+    } catch {
+      // ignore parse failure
+    }
+    throw new Error(errDetail);
   }
 
   if (!res.ok) {

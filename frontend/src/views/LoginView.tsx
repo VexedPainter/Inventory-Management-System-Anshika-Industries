@@ -7,7 +7,7 @@ import { AiOrb } from '../components/AiOrb';
 export const LoginView: React.FC = () => {
   const { login, isLoading, showForcedPasswordModal, changePassword, dismissForcedPasswordModal } = useAuth();
   const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('admin123');
+  const [password, setPassword] = useState('admin@2026');
   const [errorMsg, setErrorMsg] = useState('');
 
   // Forced password modal state
@@ -139,21 +139,21 @@ export const LoginView: React.FC = () => {
           <div className="flex items-center justify-center gap-2 flex-wrap">
             <button
               type="button"
-              onClick={() => { setUsername('admin'); setPassword('admin123'); }}
+              onClick={() => { setUsername('admin'); setPassword('admin@2026'); setErrorMsg(''); }}
               className="text-[11px] font-mono px-2.5 py-1 bg-canvas-light dark:bg-black/30 rounded-pill hover:bg-black/5 text-sage font-medium"
             >
               admin
             </button>
             <button
               type="button"
-              onClick={() => { setUsername('manager'); setPassword('manager123'); }}
+              onClick={() => { setUsername('manager'); setPassword('manager@2026'); setErrorMsg(''); }}
               className="text-[11px] font-mono px-2.5 py-1 bg-canvas-light dark:bg-black/30 rounded-pill hover:bg-black/5 text-sage font-medium"
             >
               manager
             </button>
             <button
               type="button"
-              onClick={() => { setUsername('storekeeper'); setPassword('store123'); }}
+              onClick={() => { setUsername('storekeeper'); setPassword('storekeeper@2026'); setErrorMsg(''); }}
               className="text-[11px] font-mono px-2.5 py-1 bg-canvas-light dark:bg-black/30 rounded-pill hover:bg-black/5 text-sage font-medium"
             >
               storekeeper
