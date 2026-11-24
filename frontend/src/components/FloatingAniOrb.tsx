@@ -661,6 +661,23 @@ export const FloatingAniOrb: React.FC = () => {
   return (
     <>
       {/* ================================================================== */}
+      {/* INTRO SPOTLIGHT BLUR BACKDROP OVERLAY                              */}
+      {/* ================================================================== */}
+      <AnimatePresence>
+        {stage === 'intro' && (
+          <motion.div
+            key="ani-intro-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.35, ease: 'easeInOut' }}
+            onClick={() => runGoodbye({ cancelled: false })}
+            className="fixed inset-0 z-40 bg-black/40 dark:bg-black/60 backdrop-blur-md pointer-events-auto cursor-pointer"
+            title="Click anywhere to skip intro"
+          />
+        )}
+      </AnimatePresence>
+      {/* ================================================================== */}
       {/* LAYER E: GHOST TRAIL (4 copies with springs)                       */}
       {/* ================================================================== */}
       {showTrail && (
@@ -743,7 +760,7 @@ export const FloatingAniOrb: React.FC = () => {
               opacity: [0.9, 1, 0],
             }}
             transition={{ duration: 0.7, ease: 'easeOut' }}
-            className="fixed pointer-events-none z-40"
+            className="fixed pointer-events-none z-[55]"
           >
             <svg
               width={sp.size}
@@ -785,7 +802,7 @@ export const FloatingAniOrb: React.FC = () => {
           translateY: '-50%',
           touchAction: 'none',
         }}
-        className="fixed left-0 top-0 z-40 select-none outline-none focus-visible:ring-2 focus-visible:ring-sage rounded-full cursor-grab active:cursor-grabbing"
+        className={`fixed left-0 top-0 ${stage === 'intro' ? 'z-[60]' : 'z-40'} select-none outline-none focus-visible:ring-2 focus-visible:ring-sage rounded-full cursor-grab active:cursor-grabbing`}
       >
         <div className="relative flex items-center justify-center">
           {/* Docked Pill Label ("Ask Ani" + green dot) when docked */}
