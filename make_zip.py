@@ -79,8 +79,8 @@ def run_pytest():
     print("  pytest: all tests passed.")
 
 
-def create_zip(out_path: str):
-    print(f"Step 4: Creating {out_path} ...")
+def create_zip(out_path: str, include_env: bool = False):
+    print(f"Creating {out_path} (include_env={include_env}) ...")
     count = 0
     with zipfile.ZipFile(out_path, 'w', zipfile.ZIP_DEFLATED) as zf:
         for root, dirs, files in os.walk(PROJECT_ROOT):
@@ -90,7 +90,10 @@ def create_zip(out_path: str):
             ]
             for filename in files:
                 ext = os.path.splitext(filename)[1].lower()
-                if filename in IGNORE_FILES or ext in IGNORE_EXTS or filename.startswith('.env'):
+                is_env = filename in IGNORE_FILES or filename.startswith('.env')
+                if is_env and not include_env:
+                    continue
+                if ext in IGNORE_EXTS:
                     continue
                 if any(fnmatch.fnmatch(filename, pat) for pat in IGNORE_FILE_PATTERNS):
                     continue
@@ -109,9 +112,16 @@ if __name__ == '__main__':
     run_node_check()
     run_pytest()
     
-    for name in OUTPUT_NAMES:
+    # 1. Anishka_Inventory_v1.0.zip includes .env
+    # 2. Anishka_Inventory_v2.0.zip strictly excludes .env
+    targets = [
+        ('Anishka_Inventory_v1.0.zip', True),
+        ('Anishka_Inventory_v2.0.zip', False)
+    ]
+    
+    for name, inc_env in targets:
         out = os.path.join(PROJECT_ROOT, name)
-        create_zip(out)
+        create_zip(out, include_env=inc_env)
         parent_zip = os.path.join(os.path.dirname(PROJECT_ROOT), name)
         try:
             shutil.copy2(out, parent_zip)
