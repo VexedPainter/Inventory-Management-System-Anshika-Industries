@@ -16,6 +16,7 @@ import {
   ArrowRight,
   Download,
   FileText,
+  Trash2,
 } from 'lucide-react';
 import { apiFetch, downloadFile } from '../api/client';
 import { useAuth } from '../context/AuthContext';
@@ -40,6 +41,41 @@ export const SalesView: React.FC = () => {
     reference: 'UTR-99201',
     notes: 'Electronic Transfer Clearance',
   });
+
+  // Quote Creation Modal State
+  const [isQuoteModalOpen, setIsQuoteModalOpen] = useState(false);
+  const [quoteCustomerId, setQuoteCustomerId] = useState<number | ''>('');
+  const [quoteCustomerName, setQuoteCustomerName] = useState('');
+  const [quoteOppRef, setQuoteOppRef] = useState('');
+  const [quoteNotes, setQuoteNotes] = useState('');
+  const [quoteValidUntil, setQuoteValidUntil] = useState('');
+  const [quoteItems, setQuoteItems] = useState<
+    Array<{
+      item_id: number;
+      name: string;
+      sku: string;
+      qty: number;
+      unit_price: number;
+      discount_pct: number;
+    }>
+  >([]);
+  const [selectedItemToAdd, setSelectedItemToAdd] = useState<string>('');
+
+  // Fetch Customers for quote creation
+  const { data: rawCustomers } = useQuery({
+    queryKey: ['/api/customers'],
+    queryFn: () => apiFetch('/api/customers'),
+    staleTime: 60000,
+  });
+  const customers = Array.isArray(rawCustomers) ? rawCustomers : [];
+
+  // Fetch Inventory for items selection
+  const { data: rawInventory } = useQuery({
+    queryKey: ['/api/inventory'],
+    queryFn: () => apiFetch('/api/inventory'),
+    staleTime: 60000,
+  });
+  const inventoryItems = Array.isArray(rawInventory) ? rawInventory : [];
 
   // Fetch Sales Orders
   const { data: rawOrders, isLoading: ordersLoading, refetch: refetchOrders } = useQuery({
@@ -70,29 +106,117 @@ export const SalesView: React.FC = () => {
   const displayOpportunities = useMemo(() => {
     if (opportunities.length > 0) return opportunities;
     // Derive from orders repeat patterns
-    const customerCounts: Record<string, { count: number; total: number; lastOrder: any }> = {};
+    const customerCounts: Record<string, { count: number; total: number; lastOrder: any; customerId: number }> = {};
     orders.forEach((ord: any) => {
       const cname = ord.customer_name || `Customer #${ord.customer_id || 'Unknown'}`;
       if (!customerCounts[cname]) {
-        customerCounts[cname] = { count: 0, total: 0, lastOrder: ord };
+        customerCounts[cname] = { count: 0, total: 0, lastOrder: ord, customerId: ord.customer_id };
       }
       customerCounts[cname].count += 1;
       customerCounts[cname].total += Number(ord.total_amount || 0);
+      if (!customerCounts[cname].lastOrder || ord.id > customerCounts[cname].lastOrder.id) {
+        customerCounts[cname].lastOrder = ord;
+        customerCounts[cname].customerId = ord.customer_id;
+      }
     });
 
     const computed = Object.entries(customerCounts)
-      .map(([customerName, data], idx) => ({
-        id: `computed-${idx + 1}`,
-        opportunity_no: `OPP-REP-${101 + idx}`,
-        customer_name: customerName,
-        title: `Recurring Spares Re-Order — ${customerName}`,
-        description: `Repeat buyer (${data.count} confirmed order${data.count > 1 ? 's' : ''}). Projected replenishment based on inventory consumption cycle.`,
-        stage: data.count > 1 ? 'REPEAT_CYCLE' : 'LEAD',
-        estimated_value: Math.round(data.total / data.count) || 25000,
-      }));
+      .map(([customerName, data], idx) => {
+        const lastOrd = data.lastOrder || {};
+        return {
+          id: `computed-${idx + 1}`,
+          opportunity_no: `OPP-REP-${101 + idx}`,
+          customer_name: customerName,
+          customer_id: data.customerId || lastOrd.customer_id || 1,
+          items: lastOrd.items || [],
+          title: `Recurring Spares Re-Order — ${customerName}`,
+          description: `Repeat buyer (${data.count} confirmed order${data.count > 1 ? 's' : ''}). Projected replenishment based on inventory consumption cycle.`,
+          stage: data.count > 1 ? 'REPEAT_CYCLE' : 'LEAD',
+          estimated_value: Math.round(data.total / data.count) || 25000,
+          lastOrder: lastOrd,
+        };
+      });
 
     return computed;
   }, [opportunities, orders]);
+
+  // Open Quote Modal helper
+  const openQuoteModalForOpp = (opp: any) => {
+    if (opp) {
+      let cid = opp.customer_id;
+      if (!cid && customers.length > 0) {
+        const match = customers.find((c: any) => c.name?.toLowerCase() === opp.customer_name?.toLowerCase());
+        if (match) cid = match.id;
+      }
+      if (!cid && customers.length > 0) cid = customers[0].id;
+      setQuoteCustomerId(cid || 1);
+      setQuoteCustomerName(opp.customer_name || '');
+      setQuoteOppRef(opp.opportunity_no || '');
+      setQuoteNotes(`Quotation prepared for repeat replenishment (${opp.opportunity_no || 'Pipeline'})`);
+
+      let initialItems: any[] = [];
+      if (opp.items && opp.items.length > 0) {
+        initialItems = opp.items.map((it: any) => ({
+          item_id: it.item_id,
+          name: it.name || 'Welding Spare',
+          sku: it.sku || '',
+          qty: it.qty || 5,
+          unit_price: it.unit_price || 500,
+          discount_pct: it.discount_pct || 0,
+        }));
+      } else if (inventoryItems.length > 0) {
+        const first = inventoryItems[0];
+        initialItems = [{
+          item_id: first.id,
+          name: first.name,
+          sku: first.sku,
+          qty: 10,
+          unit_price: first.selling_price || first.unit_price || 450,
+          discount_pct: 0,
+        }];
+      }
+      setQuoteItems(initialItems);
+    } else {
+      setQuoteCustomerId(customers[0]?.id || 1);
+      setQuoteCustomerName(customers[0]?.name || '');
+      setQuoteOppRef('');
+      setQuoteNotes('Commercial sales quotation for industrial welding spares');
+      if (inventoryItems.length > 0) {
+        const first = inventoryItems[0];
+        setQuoteItems([{
+          item_id: first.id,
+          name: first.name,
+          sku: first.sku,
+          qty: 10,
+          unit_price: first.selling_price || first.unit_price || 450,
+          discount_pct: 0,
+        }]);
+      } else {
+        setQuoteItems([]);
+      }
+    }
+
+    const d = new Date();
+    d.setDate(d.getDate() + 15);
+    setQuoteValidUntil(d.toISOString().split('T')[0]);
+    setIsQuoteModalOpen(true);
+  };
+
+  // Create Quote Mutation
+  const createQuoteMutation = useMutation({
+    mutationFn: (payload: any) =>
+      apiFetch('/api/sales/orders', {
+        method: 'POST',
+        body: payload,
+      }),
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ['/api/sales/orders'] });
+      triggerSuccess(`Quotation ${data.order_no || 'Quote'} generated successfully!`);
+      setIsQuoteModalOpen(false);
+      setActiveSubTab('orders');
+    },
+    onError: (err: any) => triggerAlert(err.message || 'Failed to create quotation'),
+  });
 
   // Mutations
   const confirmOrderMutation = useMutation({
@@ -164,6 +288,16 @@ export const SalesView: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          {canManage && (
+            <motion.button
+              whileTap={{ scale: 0.98 }}
+              onClick={() => openQuoteModalForOpp(null)}
+              className="px-3.5 py-2 rounded-pill bg-sage hover:bg-sage-dark text-white text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all"
+            >
+              <Plus size={14} />
+              <span>Create Quote</span>
+            </motion.button>
+          )}
           <motion.button
             whileTap={{ scale: 0.98 }}
             onClick={() => {
@@ -500,9 +634,13 @@ export const SalesView: React.FC = () => {
                       {opp.estimated_value != null ? `₹${Number(opp.estimated_value).toLocaleString('en-IN')}` : '—'}
                     </span>
                   </div>
-                  <button className="text-xs text-sage font-semibold hover:underline flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => openQuoteModalForOpp(opp)}
+                    className="text-xs text-sage font-semibold hover:underline flex items-center gap-1 group transition-all"
+                  >
                     <span>Create Quote</span>
-                    <ArrowRight size={12} />
+                    <ArrowRight size={12} className="group-hover:translate-x-0.5 transition-transform" />
                   </button>
                 </div>
               </div>
@@ -628,6 +766,304 @@ export const SalesView: React.FC = () => {
             </motion.div>
           </div>
         )}
+        {/* Create Quotation Modal */}
+        {isQuoteModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsQuoteModalOpen(false)}
+              className="fixed inset-0 bg-black/40 backdrop-blur-[8px]"
+            />
+            <motion.div
+              initial={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: 8 }}
+              animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, scale: 1, y: 0 }}
+              exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: 8 }}
+              className="relative z-10 bg-card-light dark:bg-card-dark max-w-2xl w-full rounded-card p-6 shadow-2xl border border-hairline-light dark:border-hairline-dark text-xs max-h-[90vh] overflow-y-auto"
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-hairline-light dark:border-hairline-dark">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-full bg-sage/10 text-sage flex items-center justify-center">
+                    <FileCheck size={18} />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-ink-light dark:text-ink-dark">
+                      Create Sales Quotation
+                    </h3>
+                    <p className="text-[11px] text-muted">
+                      {quoteOppRef ? `From Opportunity ${quoteOppRef}` : 'New Customer Commercial Quote'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsQuoteModalOpen(false)}
+                  className="text-muted hover:text-ink-light p-1"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              <form
+                onSubmit={e => {
+                  e.preventDefault();
+                  if (!quoteCustomerId) {
+                    triggerAlert('Please select a customer for this quote');
+                    return;
+                  }
+                  if (quoteItems.length === 0) {
+                    triggerAlert('Please add at least one line item');
+                    return;
+                  }
+                  createQuoteMutation.mutate({
+                    customer_id: Number(quoteCustomerId),
+                    is_quote: true,
+                    valid_until: quoteValidUntil || undefined,
+                    notes: quoteNotes || undefined,
+                    items: quoteItems.map(it => ({
+                      item_id: Number(it.item_id),
+                      qty: Number(it.qty) || 1,
+                      unit_price: Number(it.unit_price) || 0,
+                      discount_pct: Number(it.discount_pct) || 0,
+                    })),
+                  });
+                }}
+                className="mt-4 space-y-4"
+              >
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-muted font-medium mb-1">Customer Account</label>
+                    <select
+                      value={quoteCustomerId}
+                      onChange={e => {
+                        const cid = Number(e.target.value);
+                        setQuoteCustomerId(cid);
+                        const match = customers.find((c: any) => c.id === cid);
+                        if (match) setQuoteCustomerName(match.name);
+                      }}
+                      required
+                      className="w-full bg-canvas-light dark:bg-black/20 rounded-pill px-3 py-2 border border-hairline-light dark:border-hairline-dark font-medium text-ink-light dark:text-ink-dark"
+                    >
+                      {customers.map((c: any) => (
+                        <option key={c.id} value={c.id} className="dark:bg-[#181B1A]">
+                          {c.name} {c.city ? `(${c.city})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-muted font-medium mb-1">Quote Validity Date</label>
+                    <input
+                      type="date"
+                      value={quoteValidUntil}
+                      onChange={e => setQuoteValidUntil(e.target.value)}
+                      className="w-full bg-canvas-light dark:bg-black/20 rounded-pill px-3 py-2 border border-hairline-light dark:border-hairline-dark font-mono text-ink-light dark:text-ink-dark"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-muted font-medium mb-1">Notes / Terms</label>
+                  <input
+                    type="text"
+                    value={quoteNotes}
+                    onChange={e => setQuoteNotes(e.target.value)}
+                    placeholder="E.g. Delivery within 3 days, 30 days credit terms..."
+                    className="w-full bg-canvas-light dark:bg-black/20 rounded-pill px-3 py-2 border border-hairline-light dark:border-hairline-dark text-ink-light dark:text-ink-dark"
+                  />
+                </div>
+
+                {/* Line Items Section */}
+                <div className="pt-2">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-bold text-ink-light dark:text-ink-dark text-xs uppercase tracking-wider">
+                      Quotation Line Items ({quoteItems.length})
+                    </span>
+                  </div>
+
+                  <div className="border border-hairline-light dark:border-hairline-dark rounded-tile overflow-hidden divide-y divide-hairline-light dark:divide-hairline-dark bg-canvas-light/30 dark:bg-black/10">
+                    {quoteItems.map((item, idx) => {
+                      const lineTaxable = (item.qty || 0) * (item.unit_price || 0) * (1 - (item.discount_pct || 0) / 100);
+                      return (
+                        <div key={idx} className="p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                          <div className="flex-1">
+                            <span className="font-semibold text-ink-light dark:text-ink-dark block">
+                              {item.name}
+                            </span>
+                            <span className="text-[10px] text-muted font-mono">{item.sku || 'SKU-ITEM'}</span>
+                          </div>
+
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <div className="w-20">
+                              <span className="text-[10px] text-muted block mb-0.5">Qty</span>
+                              <input
+                                type="number"
+                                min={1}
+                                value={item.qty}
+                                onChange={e => {
+                                  const val = Math.max(1, parseInt(e.target.value) || 1);
+                                  const updated = [...quoteItems];
+                                  updated[idx].qty = val;
+                                  setQuoteItems(updated);
+                                }}
+                                className="w-full bg-white dark:bg-black/30 rounded-pill px-2.5 py-1 border border-hairline-light dark:border-hairline-dark font-mono text-center"
+                              />
+                            </div>
+
+                            <div className="w-24">
+                              <span className="text-[10px] text-muted block mb-0.5">Price (₹)</span>
+                              <input
+                                type="number"
+                                min={0}
+                                step="any"
+                                value={item.unit_price}
+                                onChange={e => {
+                                  const val = Math.max(0, parseFloat(e.target.value) || 0);
+                                  const updated = [...quoteItems];
+                                  updated[idx].unit_price = val;
+                                  setQuoteItems(updated);
+                                }}
+                                className="w-full bg-white dark:bg-black/30 rounded-pill px-2.5 py-1 border border-hairline-light dark:border-hairline-dark font-mono text-center"
+                              />
+                            </div>
+
+                            <div className="w-16">
+                              <span className="text-[10px] text-muted block mb-0.5">Disc %</span>
+                              <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                value={item.discount_pct}
+                                onChange={e => {
+                                  const val = Math.min(100, Math.max(0, parseFloat(e.target.value) || 0));
+                                  const updated = [...quoteItems];
+                                  updated[idx].discount_pct = val;
+                                  setQuoteItems(updated);
+                                }}
+                                className="w-full bg-white dark:bg-black/30 rounded-pill px-2 py-1 border border-hairline-light dark:border-hairline-dark font-mono text-center"
+                              />
+                            </div>
+
+                            <div className="w-24 text-right">
+                              <span className="text-[10px] text-muted block mb-0.5">Subtotal</span>
+                              <span className="font-mono font-bold text-ink-light dark:text-ink-dark block py-1">
+                                ₹{Math.round(lineTaxable).toLocaleString('en-IN')}
+                              </span>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setQuoteItems(quoteItems.filter((_, i) => i !== idx));
+                              }}
+                              className="text-muted hover:text-negative p-1 self-end mb-1"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {/* Add SKU row */}
+                    <div className="p-3 bg-canvas-light/50 dark:bg-black/20 flex flex-col sm:flex-row items-center gap-2">
+                      <select
+                        value={selectedItemToAdd}
+                        onChange={e => setSelectedItemToAdd(e.target.value)}
+                        className="flex-1 bg-white dark:bg-black/30 rounded-pill px-3 py-1.5 border border-hairline-light dark:border-hairline-dark text-xs text-ink-light dark:text-ink-dark"
+                      >
+                        <option value="">Select SKU to add to quote…</option>
+                        {inventoryItems.map((inv: any) => (
+                          <option key={inv.id} value={inv.id} className="dark:bg-[#181B1A]">
+                            {inv.name} ({inv.sku}) — ₹{inv.selling_price || inv.unit_price || 0}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!selectedItemToAdd) return;
+                          const found = inventoryItems.find((inv: any) => String(inv.id) === String(selectedItemToAdd));
+                          if (found) {
+                            setQuoteItems([
+                              ...quoteItems,
+                              {
+                                item_id: found.id,
+                                name: found.name,
+                                sku: found.sku,
+                                qty: 5,
+                                unit_price: found.selling_price || found.unit_price || 500,
+                                discount_pct: 0,
+                              },
+                            ]);
+                            setSelectedItemToAdd('');
+                          }
+                        }}
+                        disabled={!selectedItemToAdd}
+                        className="px-3 py-1.5 bg-ink-light dark:bg-white text-white dark:text-ink-light rounded-pill font-semibold disabled:opacity-40 flex items-center gap-1 shrink-0"
+                      >
+                        <Plus size={13} />
+                        <span>Add Item</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Calculation breakdown */}
+                {(() => {
+                  const taxable = quoteItems.reduce(
+                    (sum, it) => sum + (it.qty || 0) * (it.unit_price || 0) * (1 - (it.discount_pct || 0) / 100),
+                    0
+                  );
+                  const gst = taxable * 0.18;
+                  const grandTotal = taxable + gst;
+                  return (
+                    <div className="p-3 rounded-tile bg-sage/10 border border-sage/20 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="text-[11px] text-muted space-x-3">
+                        <span>Taxable: <strong className="font-mono text-ink-light dark:text-ink-dark">₹{Math.round(taxable).toLocaleString('en-IN')}</strong></span>
+                        <span>GST (18%): <strong className="font-mono text-ink-light dark:text-ink-dark">₹{Math.round(gst).toLocaleString('en-IN')}</strong></span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[10px] text-muted uppercase font-bold tracking-wider mr-2">Grand Total</span>
+                        <span className="font-mono font-bold text-base text-sage">
+                          ₹{Math.round(grandTotal).toLocaleString('en-IN')}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                <div className="pt-3 border-t border-hairline-light dark:border-hairline-dark flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsQuoteModalOpen(false)}
+                    className="px-4 py-2 bg-black/5 dark:bg-white/10 rounded-pill text-muted hover:text-ink-light font-semibold"
+                  >
+                    Cancel
+                  </button>
+                  <motion.button
+                    whileTap={{ scale: 0.98 }}
+                    type="submit"
+                    disabled={createQuoteMutation.isPending || quoteItems.length === 0}
+                    className="px-5 py-2 bg-sage hover:bg-sage-dark text-white rounded-pill font-semibold disabled:opacity-50 flex items-center gap-2 shadow-sm"
+                  >
+                    {createQuoteMutation.isPending ? (
+                      <span>Generating Quote…</span>
+                    ) : (
+                      <>
+                        <FileCheck size={14} />
+                        <span>Generate & Send Quotation</span>
+                      </>
+                    )}
+                  </motion.button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+
       </AnimatePresence>
     </div>
   );
