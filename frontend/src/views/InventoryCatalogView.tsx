@@ -20,7 +20,7 @@ import {
   CheckCircle2,
   Trash2,
 } from 'lucide-react';
-import { apiFetch } from '../api/client';
+import { apiFetch, downloadFile } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useOrb } from '../context/OrbContext';
 import { CountUp } from '../components/CountUp';
@@ -63,6 +63,8 @@ export const InventoryCatalogView: React.FC = () => {
   const [isCsvImportOpen, setIsCsvImportOpen] = useState(false);
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
   const [selectedItemForQr, setSelectedItemForQr] = useState<InventoryItem | null>(null);
+  const [isLabelsMenuOpen, setIsLabelsMenuOpen] = useState(false);
+  const [dispatchNoteId, setDispatchNoteId] = useState<string | null>(null);
 
   // Form states
   const [addForm, setAddForm] = useState({
@@ -193,10 +195,13 @@ export const InventoryCatalogView: React.FC = () => {
         },
       });
     },
-    onSuccess: (_, vars) => {
+    onSuccess: (res, vars) => {
       queryClient.invalidateQueries({ queryKey: ['/api/inventory'] });
       triggerSuccess(`Stock ${vars.type === 'IN' ? 'receipt' : 'dispatch'} recorded`);
       setIsStockModalOpen(false);
+      if (vars.type === 'OUT' && (res?.movement_id || res?.data?.movement_id)) {
+        setDispatchNoteId(res.movement_id || res.data?.movement_id);
+      }
     },
     onError: (err: any) => {
       triggerAlert(err.message || 'Transaction failed');
@@ -333,10 +338,85 @@ export const InventoryCatalogView: React.FC = () => {
             </motion.button>
           )}
 
-          {/* Export CSV */}
+          {/* Low-stock Exports */}
+          <div className="flex items-center gap-1 bg-card-light dark:bg-card-dark border border-hairline-light dark:border-hairline-dark rounded-pill px-2.5 py-1 text-xs">
+            <span className="text-muted font-medium pr-1">Low-stock:</span>
+            <button
+              onClick={() => downloadFile('/api/export/low-stock/pdf', 'Low_Stock_Report.pdf')}
+              className="text-sage hover:underline font-semibold px-1"
+            >
+              PDF
+            </button>
+            <span className="text-muted">•</span>
+            <button
+              onClick={() => downloadFile('/api/export/low-stock/excel', 'Low_Stock_Report.xlsx')}
+              className="text-sage hover:underline font-semibold px-1"
+            >
+              Excel
+            </button>
+            <span className="text-muted">•</span>
+            <button
+              onClick={() => downloadFile('/api/export/low-stock/csv', 'Low_Stock_Report.csv')}
+              className="text-sage hover:underline font-semibold px-1"
+            >
+              CSV
+            </button>
+          </div>
+
+          {/* QR Labels Dropdown Menu */}
+          <div className="relative">
+            <motion.button
+              whileTap={{ scale: 0.98 }}
+              onClick={() => setIsLabelsMenuOpen(!isLabelsMenuOpen)}
+              className="px-3.5 py-2 bg-card-light dark:bg-card-dark hover:bg-black/5 dark:hover:bg-white/5 border border-hairline-light dark:border-hairline-dark text-xs font-semibold rounded-pill flex items-center gap-1.5 shadow-sm transition-colors"
+            >
+              <QrCode size={14} className="text-sage" />
+              <span>QR Labels</span>
+            </motion.button>
+
+            {isLabelsMenuOpen && (
+              <div
+                className="absolute right-0 mt-1.5 w-44 bg-card-light dark:bg-card-dark border border-hairline-light dark:border-hairline-dark rounded-card shadow-xl p-1.5 z-30 text-xs flex flex-col gap-1"
+                onMouseLeave={() => setIsLabelsMenuOpen(false)}
+              >
+                <button
+                  onClick={() => {
+                    setIsLabelsMenuOpen(false);
+                    downloadFile('/api/labels/items/pdf?all=1', 'Item_Labels_All.pdf');
+                  }}
+                  className="w-full text-left px-3 py-1.5 rounded hover:bg-black/5 dark:hover:bg-white/10 text-ink-light dark:text-ink-dark font-medium"
+                >
+                  All Items
+                </button>
+                <button
+                  onClick={() => {
+                    setIsLabelsMenuOpen(false);
+                    downloadFile(
+                      `/api/labels/items/pdf?category=${encodeURIComponent(selectedCategory === 'ALL' ? '' : selectedCategory)}`,
+                      `Item_Labels_${selectedCategory === 'ALL' ? 'General' : selectedCategory}.pdf`
+                    );
+                  }}
+                  className="w-full text-left px-3 py-1.5 rounded hover:bg-black/5 dark:hover:bg-white/10 text-ink-light dark:text-ink-dark font-medium"
+                >
+                  By Category {selectedCategory !== 'ALL' ? `(${selectedCategory})` : ''}
+                </button>
+                <button
+                  onClick={() => {
+                    setIsLabelsMenuOpen(false);
+                    downloadFile('/api/labels/bins/pdf?all=1', 'Bin_Labels.pdf');
+                  }}
+                  className="w-full text-left px-3 py-1.5 rounded hover:bg-black/5 dark:hover:bg-white/10 text-ink-light dark:text-ink-dark font-medium"
+                >
+                  Bin Labels
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Export Catalog CSV */}
           <motion.button
             whileTap={{ scale: 0.98 }}
-            onClick={() => window.open('/api/inventory/export?format=csv', '_blank')}
+            onClick={() => downloadFile('/api/export/csv/inventory', 'Anishka_Inventory_Catalog.csv')}
             className="w-9 h-9 rounded-full bg-card-light dark:bg-card-dark hover:bg-black/5 dark:hover:bg-white/5 border border-hairline-light dark:border-hairline-dark flex items-center justify-center text-muted hover:text-ink-light transition-colors"
             title="Download Catalog CSV"
           >
@@ -344,6 +424,34 @@ export const InventoryCatalogView: React.FC = () => {
           </motion.button>
         </div>
       </div>
+
+      {/* Dispatch Note Banner if stock-out was just performed */}
+      {dispatchNoteId && (
+        <div className="bg-[#2D6A4F]/10 border border-[#2D6A4F]/30 text-ink-light dark:text-ink-dark rounded-card p-3.5 flex items-center justify-between text-xs">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 size={16} className="text-[#2D6A4F]" />
+            <span>Stock dispatched successfully (Ref #{dispatchNoteId})</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <motion.button
+              whileTap={{ scale: 0.98 }}
+              onClick={() =>
+                downloadFile(`/api/pdf/dispatch/${dispatchNoteId}`, `Dispatch_Note_${dispatchNoteId}.pdf`)
+              }
+              className="px-3.5 py-1.5 bg-[#2D6A4F] text-white rounded-pill font-semibold flex items-center gap-1.5 shadow-sm sweep-hover"
+            >
+              <Download size={13} />
+              <span>Download Goods Dispatch Note (PDF)</span>
+            </motion.button>
+            <button
+              onClick={() => setDispatchNoteId(null)}
+              className="p-1 text-muted hover:text-ink-light"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ==================================================================== */}
       {/* 2. FILTER PILLS & SEARCH BAR                                         */}

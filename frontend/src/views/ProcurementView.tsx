@@ -14,8 +14,9 @@ import {
   X,
   RefreshCw,
   Plus,
+  Download,
 } from 'lucide-react';
-import { apiFetch } from '../api/client';
+import { apiFetch, downloadFile } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useOrb } from '../context/OrbContext';
 import { Skeleton } from '../components/Skeleton';
@@ -164,6 +165,16 @@ export const ProcurementView: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          {/* All POs (PDF) */}
+          <motion.button
+            whileTap={{ scale: 0.98 }}
+            onClick={() => downloadFile('/api/pdf/bulk-procurement', 'All_Purchase_Orders.pdf')}
+            className="px-3.5 py-2 bg-ink-light dark:bg-white text-white dark:text-ink-light rounded-pill text-xs font-semibold shadow-bento sweep-hover flex items-center gap-1.5"
+          >
+            <Download size={13} />
+            <span>All POs (PDF)</span>
+          </motion.button>
+
           <motion.button
             whileTap={{ scale: 0.98 }}
             onClick={() => setIsScanChallanOpen(true)}
@@ -335,6 +346,21 @@ export const ProcurementView: React.FC = () => {
                               Receive Lines
                             </motion.button>
                           )}
+
+                          {/* Download PO PDF */}
+                          <motion.button
+                            whileTap={{ scale: 0.98 }}
+                            onClick={() =>
+                              downloadFile(
+                                `/api/pdf/${po.po_number || po.id}`,
+                                `PO_${po.po_number || po.id}.pdf`
+                              )
+                            }
+                            className="p-1.5 rounded-full bg-card-light dark:bg-card-dark border border-hairline-light dark:border-hairline-dark hover:bg-black/5 dark:hover:bg-white/10 text-muted hover:text-ink-light transition-colors"
+                            title="Download PDF"
+                          >
+                            <Download size={13} />
+                          </motion.button>
                         </div>
                       </td>
                     </tr>
@@ -409,32 +435,47 @@ export const ProcurementView: React.FC = () => {
                 ))}
               </div>
 
-              <div className="pt-3 border-t border-hairline-light dark:border-hairline-dark flex items-center justify-end gap-2">
+              <div className="pt-3 border-t border-hairline-light dark:border-hairline-dark flex items-center justify-between gap-2">
                 <button
                   type="button"
-                  onClick={() => setIsReceiveModalOpen(false)}
-                  className="px-4 py-2 bg-black/5 dark:bg-white/10 rounded-pill text-muted"
+                  onClick={() =>
+                    downloadFile(
+                      `/api/pdf/${selectedPO.po_number || selectedPO.id}`,
+                      `PO_${selectedPO.po_number || selectedPO.id}.pdf`
+                    )
+                  }
+                  className="px-3.5 py-2 bg-card-light dark:bg-card-dark border border-hairline-light dark:border-hairline-dark hover:bg-black/5 dark:hover:bg-white/10 rounded-pill text-ink-light dark:text-ink-dark flex items-center gap-1.5 font-semibold"
                 >
-                  Cancel
+                  <Download size={13} />
+                  <span>Download PO PDF</span>
                 </button>
-                <motion.button
-                  whileTap={{ scale: 0.98 }}
-                  type="button"
-                  disabled={receiveMutation.isPending}
-                  onClick={() => {
-                    const itemsPayload = Object.entries(receivedQtyMap).map(([id, qty]) => ({
-                      item_id: Number(id),
-                      qty_received: qty,
-                    }));
-                    receiveMutation.mutate({
-                      poId: selectedPO.id,
-                      itemsPayload,
-                    });
-                  }}
-                  className="px-5 py-2 bg-positive hover:bg-positive/90 text-white rounded-pill font-semibold sweep-hover"
-                >
-                  {receiveMutation.isPending ? 'Receiving…' : 'Confirm Receipt'}
-                </motion.button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsReceiveModalOpen(false)}
+                    className="px-4 py-2 bg-black/5 dark:bg-white/10 rounded-pill text-muted"
+                  >
+                    Cancel
+                  </button>
+                  <motion.button
+                    whileTap={{ scale: 0.98 }}
+                    type="button"
+                    disabled={receiveMutation.isPending}
+                    onClick={() => {
+                      const itemsPayload = Object.entries(receivedQtyMap).map(([id, qty]) => ({
+                        item_id: Number(id),
+                        qty_received: qty,
+                      }));
+                      receiveMutation.mutate({
+                        poId: selectedPO.id,
+                        itemsPayload,
+                      });
+                    }}
+                    className="px-5 py-2 bg-positive hover:bg-positive/90 text-white rounded-pill font-semibold sweep-hover"
+                  >
+                    {receiveMutation.isPending ? 'Receiving…' : 'Confirm Receipt'}
+                  </motion.button>
+                </div>
               </div>
             </motion.div>
           </div>

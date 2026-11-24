@@ -37,7 +37,7 @@ IGNORE_FILES = {'.env', '.env.example', '.env.local', '.env.production'}
 
 IGNORE_FILE_PATTERNS = ['fix_*.py', '*.db', '*.sqlite*']
 
-OUTPUT_NAME = 'Anishka_Inventory_v1.0.zip'
+OUTPUT_NAMES = ['Anishka_Inventory_v1.0.zip', 'Anishka_Inventory_v2.0.zip']
 
 
 def run_import_check():
@@ -103,17 +103,20 @@ def create_zip(out_path: str):
 
 
 if __name__ == '__main__':
+    import shutil
     os.chdir(PROJECT_ROOT)
     run_import_check()
     run_node_check()
     run_pytest()
-    out = os.path.join(PROJECT_ROOT, OUTPUT_NAME)
-    create_zip(out)
-    parent_zip = os.path.join(os.path.dirname(PROJECT_ROOT), OUTPUT_NAME)
-    try:
-        import shutil
-        shutil.copy2(out, parent_zip)
-        print(f"  Also updated parent zip: {parent_zip}")
-    except Exception as e:
-        pass
-    print("\nDone! Zip is ready:", out)
+    
+    for name in OUTPUT_NAMES:
+        out = os.path.join(PROJECT_ROOT, name)
+        create_zip(out)
+        parent_zip = os.path.join(os.path.dirname(PROJECT_ROOT), name)
+        try:
+            shutil.copy2(out, parent_zip)
+            print(f"  Also updated parent zip: {parent_zip}")
+        except Exception as e:
+            print(f"  Note: Could not copy to parent: {e}")
+        print("Zip is ready:", out)
+    print("\nDone! Both zip files updated successfully.")

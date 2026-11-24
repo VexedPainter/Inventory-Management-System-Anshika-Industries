@@ -12,6 +12,9 @@ import {
   Mail,
   X,
   RefreshCw,
+  Download,
+  BookOpen,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { apiFetch } from '../api/client';
 import { useAuth } from '../context/AuthContext';
@@ -39,6 +42,7 @@ export const CustomersView: React.FC = () => {
 
   const [search, setSearch] = useState('');
   const [isAddOpen, setIsAddOpen] = useState(false);
+  const [selectedCustomerForLedger, setSelectedCustomerForLedger] = useState<Customer | null>(null);
   const [addForm, setAddForm] = useState({
     name: '',
     contact_person: 'Procurement Head',
@@ -57,6 +61,37 @@ export const CustomersView: React.FC = () => {
   });
 
   const customers = Array.isArray(data) ? data : [];
+
+  // Fetch individual customer financial ledger
+  const { data: ledgerData, isLoading: ledgerLoading } = useQuery({
+    queryKey: ['/api/customers/ledger', selectedCustomerForLedger?.id],
+    queryFn: () => apiFetch(`/api/customers/${selectedCustomerForLedger?.id}/ledger`),
+    enabled: Boolean(selectedCustomerForLedger?.id),
+  });
+
+  const handleExportLedgerCsv = () => {
+    if (!ledgerData?.transactions?.length || !selectedCustomerForLedger) return;
+    const headers = ['Date', 'Type', 'Reference', 'Details', 'Debit (INR)', 'Credit (INR)', 'Running Balance (INR)'];
+    const rows = ledgerData.transactions.map((t: any) => [
+      `"${t.date || ''}"`,
+      `"${t.type || ''}"`,
+      `"${t.ref || t.reference || ''}"`,
+      `"${(t.details || '').replace(/"/g, '""')}"`,
+      t.debit ?? 0,
+      t.credit ?? 0,
+      t.running_balance ?? 0,
+    ]);
+    const csvContent = [headers.join(','), ...rows.map((r: any[]) => r.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${selectedCustomerForLedger.name.replace(/\s+/g, '_')}_Ledger.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  };
 
   const filteredCustomers = useMemo(() => {
     if (!search.trim()) return customers;
@@ -160,20 +195,21 @@ export const CustomersView: React.FC = () => {
                 <th className="py-3.5 px-4 text-center">City / State</th>
                 <th className="py-3.5 px-4 text-right">Credit Limit</th>
                 <th className="py-3.5 px-4 text-right">Outstanding Balance</th>
+                <th className="py-3.5 px-4 text-center">Ledger</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-hairline-light dark:divide-hairline-dark">
               {isLoading ? (
                 Array.from({ length: 5 }).map((_, i) => (
                   <tr key={i} className="h-14">
-                    <td colSpan={7} className="px-4">
+                    <td colSpan={8} className="px-4">
                       <Skeleton className="h-8 w-full" rounded="md" />
                     </td>
                   </tr>
                 ))
               ) : filteredCustomers.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-16 text-center text-xs text-muted">
+                  <td colSpan={8} className="py-16 text-center text-xs text-muted">
                     No customer accounts match your search.
                   </td>
                 </tr>
@@ -214,6 +250,16 @@ export const CustomersView: React.FC = () => {
                         <span className={bal > 0 ? 'text-warning' : 'text-positive'}>
                           ₹{bal.toLocaleString('en-IN')}
                         </span>
+                      </td>
+
+                      <td className="py-2 px-4 text-center">
+                        <button
+                          onClick={() => setSelectedCustomerForLedger(c)}
+                          className="px-2.5 py-1 bg-card-light dark:bg-card-dark border border-hairline-light dark:border-hairline-dark hover:bg-black/5 dark:hover:bg-white/10 rounded-pill text-[11px] font-medium text-ink-light dark:text-ink-dark flex items-center gap-1 shadow-sm transition-colors mx-auto"
+                        >
+                          <BookOpen size={12} className="text-sage" />
+                          <span>Ledger</span>
+                        </button>
                       </td>
                     </tr>
                   );
@@ -350,6 +396,137 @@ export const CustomersView: React.FC = () => {
                   </motion.button>
                 </div>
               </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Customer Financial Ledger Drawer */}
+      <AnimatePresence>
+        {selectedCustomerForLedger && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setSelectedCustomerForLedger(null)}
+              className="fixed inset-0 bg-black/40 backdrop-blur-[8px]"
+            />
+            <motion.div
+              initial={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: 8 }}
+              animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, scale: 1, y: 0 }}
+              exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: 8 }}
+              className="relative z-10 bg-card-light dark:bg-card-dark max-w-3xl w-full rounded-card p-6 shadow-2xl border border-hairline-light dark:border-hairline-dark text-xs flex flex-col max-h-[85vh]"
+            >
+              <div className="flex items-center justify-between pb-4 border-b border-hairline-light dark:border-hairline-dark">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <BookOpen size={18} className="text-sage" />
+                    <h3 className="text-base font-bold text-ink-light dark:text-ink-dark">
+                      Financial Ledger: {selectedCustomerForLedger.name}
+                    </h3>
+                  </div>
+                  <p className="text-[11px] text-muted mt-0.5">
+                    GSTIN: {selectedCustomerForLedger.gstin || 'Unregistered'} • Credit Limit: ₹{(selectedCustomerForLedger.credit_limit || 0).toLocaleString('en-IN')}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <motion.button
+                    whileTap={{ scale: 0.98 }}
+                    onClick={handleExportLedgerCsv}
+                    disabled={!ledgerData?.transactions?.length}
+                    className="px-3.5 py-1.5 bg-ink-light dark:bg-white text-white dark:text-ink-light rounded-pill text-xs font-semibold shadow-bento sweep-hover flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    <Download size={13} />
+                    <span>Export</span>
+                  </motion.button>
+                  <button onClick={() => setSelectedCustomerForLedger(null)} className="p-1 text-muted hover:text-ink-light">
+                    <X size={16} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Ledger Summary Cards */}
+              <div className="grid grid-cols-3 gap-3 my-4">
+                <div className="p-3 rounded-card bg-canvas-light/60 dark:bg-black/20 border border-hairline-light dark:border-hairline-dark">
+                  <span className="text-[10px] text-muted uppercase font-semibold">Total Invoiced (Debit)</span>
+                  <div className="text-sm font-bold font-mono text-ink-light dark:text-ink-dark mt-1">
+                    ₹{(ledgerData?.transactions || [])
+                      .reduce((acc: number, t: any) => acc + (t.debit || 0), 0)
+                      .toLocaleString('en-IN')}
+                  </div>
+                </div>
+                <div className="p-3 rounded-card bg-canvas-light/60 dark:bg-black/20 border border-hairline-light dark:border-hairline-dark">
+                  <span className="text-[10px] text-muted uppercase font-semibold">Total Paid (Credit)</span>
+                  <div className="text-sm font-bold font-mono text-positive mt-1">
+                    ₹{(ledgerData?.transactions || [])
+                      .reduce((acc: number, t: any) => acc + (t.credit || 0), 0)
+                      .toLocaleString('en-IN')}
+                  </div>
+                </div>
+                <div className="p-3 rounded-card bg-canvas-light/60 dark:bg-black/20 border border-hairline-light dark:border-hairline-dark">
+                  <span className="text-[10px] text-muted uppercase font-semibold">Outstanding Balance</span>
+                  <div className="text-sm font-bold font-mono text-warning mt-1">
+                    ₹{(selectedCustomerForLedger.current_balance ?? ledgerData?.outstanding_balance ?? 0).toLocaleString('en-IN')}
+                  </div>
+                </div>
+              </div>
+
+              {/* Transactions Table */}
+              <div className="overflow-y-auto flex-1 no-scrollbar border border-hairline-light dark:border-hairline-dark rounded-tile">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead className="sticky top-0 bg-white/90 dark:bg-[#181B1A]/90 backdrop-blur-md border-b border-hairline-light dark:border-hairline-dark text-muted font-medium uppercase text-[10px]">
+                    <tr>
+                      <th className="py-2.5 px-3">Date</th>
+                      <th className="py-2.5 px-3">Type</th>
+                      <th className="py-2.5 px-3">Reference</th>
+                      <th className="py-2.5 px-3">Details</th>
+                      <th className="py-2.5 px-3 text-right">Debit (₹)</th>
+                      <th className="py-2.5 px-3 text-right">Credit (₹)</th>
+                      <th className="py-2.5 px-3 text-right">Balance (₹)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-hairline-light dark:divide-hairline-dark font-mono text-[11px]">
+                    {ledgerLoading ? (
+                      <tr>
+                        <td colSpan={7} className="py-8 text-center text-muted font-sans">
+                          Loading customer transactions…
+                        </td>
+                      </tr>
+                    ) : !ledgerData?.transactions?.length ? (
+                      <tr>
+                        <td colSpan={7} className="py-8 text-center text-muted font-sans">
+                          No ledger transactions found for this customer.
+                        </td>
+                      </tr>
+                    ) : (
+                      ledgerData.transactions.map((t: any, i: number) => (
+                        <tr key={i} className="hover:bg-black/2 dark:hover:bg-white/2">
+                          <td className="py-2 px-3 text-muted">{t.date || '—'}</td>
+                          <td className="py-2 px-3">
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              t.type === 'INVOICE' ? 'bg-warning/10 text-warning' : 'bg-positive/10 text-positive'
+                            }`}>
+                              {t.type}
+                            </span>
+                          </td>
+                          <td className="py-2 px-3 font-semibold text-sage">{t.ref || t.reference || '—'}</td>
+                          <td className="py-2 px-3 text-muted font-sans truncate max-w-xs">{t.details || '—'}</td>
+                          <td className="py-2 px-3 text-right text-ink-light dark:text-ink-dark">
+                            {t.debit ? `₹${Number(t.debit).toLocaleString('en-IN')}` : '—'}
+                          </td>
+                          <td className="py-2 px-3 text-right text-positive">
+                            {t.credit ? `₹${Number(t.credit).toLocaleString('en-IN')}` : '—'}
+                          </td>
+                          <td className="py-2 px-3 text-right font-bold text-ink-light dark:text-ink-dark">
+                            ₹{Number(t.running_balance ?? 0).toLocaleString('en-IN')}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </motion.div>
           </div>
         )}

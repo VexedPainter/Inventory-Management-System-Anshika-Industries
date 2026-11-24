@@ -8,6 +8,7 @@ import {
   ShieldCheck,
   Layers,
   Sparkles,
+  Download,
 } from 'lucide-react';
 import {
   AreaChart,
@@ -22,7 +23,7 @@ import {
   Pie,
   Cell,
 } from 'recharts';
-import { apiFetch } from '../api/client';
+import { apiFetch, downloadFile } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useOrb } from '../context/OrbContext';
 import { CountUp } from '../components/CountUp';
@@ -162,6 +163,32 @@ export const DashboardView: React.FC<DashboardProps> = ({
 
   return (
     <div className="space-y-4">
+      {/* Top Header Action Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-1">
+        <div>
+          <h2 className="text-xl font-bold text-ink-light dark:text-ink-dark tracking-tight">Operations Dashboard</h2>
+          <p className="text-xs text-muted mt-0.5">Real-time inventory metrics, movement velocity, and statutory compliance status</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <motion.button
+            whileTap={{ scale: 0.98 }}
+            onClick={() => downloadFile('/api/pdf/dashboard-report', 'Valuation_Dashboard_Report.pdf')}
+            className="px-3.5 py-2 bg-ink-light dark:bg-white text-white dark:text-ink-light rounded-pill text-xs font-semibold shadow-bento sweep-hover flex items-center gap-1.5"
+          >
+            <Download size={13} />
+            <span>Valuation PDF</span>
+          </motion.button>
+          <motion.button
+            whileTap={{ scale: 0.98 }}
+            onClick={() => downloadFile('/api/export/excel/comprehensive', 'Anishka_Comprehensive_Ledger.xlsx')}
+            className="px-3.5 py-2 bg-card-light dark:bg-card-dark border border-hairline-light dark:border-hairline-dark hover:bg-black/5 dark:hover:bg-white/5 text-ink-light dark:text-ink-dark rounded-pill text-xs font-semibold shadow-bento sweep-hover flex items-center gap-1.5"
+          >
+            <Download size={13} />
+            <span>Excel Ledger</span>
+          </motion.button>
+        </div>
+      </div>
+
       {/* ==================================================================== */}
       {/* ROW 1: 4 Compact Bento Cards                                         */}
       {/* ==================================================================== */}

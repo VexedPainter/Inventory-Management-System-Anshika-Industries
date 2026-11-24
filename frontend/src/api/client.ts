@@ -66,3 +66,52 @@ export async function apiFetch<T = any>(endpoint: string, options: ApiFetchOptio
   }
   return res.text() as unknown as T;
 }
+
+/**
+ * Downloads a file from the given URL using the Bearer token for auth.
+ * Creates an object URL and triggers a hidden <a download> click.
+ * Dispatches 'download-toast' CustomEvents for success/error feedback.
+ */
+export async function downloadFile(url: string, filename: string): Promise<void> {
+  const token = sessionStorage.getItem('ss_token') || localStorage.getItem('ss_token');
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  window.dispatchEvent(
+    new CustomEvent('download-toast', { detail: { msg: 'Downloading…', type: 'info' } })
+  );
+
+  try {
+    const res = await fetch(url, { headers });
+    if (!res.ok) {
+      let detail = `Error ${res.status}`;
+      try {
+        const j = await res.json();
+        detail = j.detail || j.message || detail;
+      } catch {
+        // ignore parse failure
+      }
+      window.dispatchEvent(
+        new CustomEvent('download-toast', { detail: { msg: `Download failed: ${detail}`, type: 'error' } })
+      );
+      throw new Error(detail);
+    }
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 10000);
+  } catch (err: any) {
+    // Only dispatch if it wasn't already dispatched above
+    if (!err.message?.startsWith('Error ')) {
+      window.dispatchEvent(
+        new CustomEvent('download-toast', { detail: { msg: `Download failed: ${err.message}`, type: 'error' } })
+      );
+    }
+    throw err;
+  }
+}

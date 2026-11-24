@@ -14,8 +14,10 @@ import {
   CheckCircle2,
   AlertTriangle,
   ArrowRight,
+  Download,
+  FileText,
 } from 'lucide-react';
-import { apiFetch } from '../api/client';
+import { apiFetch, downloadFile } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useOrb } from '../context/OrbContext';
 import { Skeleton } from '../components/Skeleton';
@@ -270,6 +272,22 @@ export const SalesView: React.FC = () => {
                         </td>
                         <td className="py-2 px-4 text-center">
                           <div className="flex items-center justify-center gap-1.5">
+                            {/* Quotation PDF */}
+                            <motion.button
+                              whileTap={{ scale: 0.98 }}
+                              onClick={() =>
+                                downloadFile(
+                                  `/api/sales/orders/${so.id}/quote-pdf`,
+                                  `Quotation_${so.order_number || so.order_no || so.id}.pdf`
+                                )
+                              }
+                              className="px-2.5 py-1 bg-card-light dark:bg-card-dark border border-hairline-light dark:border-hairline-dark hover:bg-black/5 dark:hover:bg-white/10 rounded-pill text-[11px] font-medium text-ink-light dark:text-ink-dark flex items-center gap-1 shadow-sm transition-colors"
+                              title="Download Quotation PDF"
+                            >
+                              <FileText size={12} className="text-sage" />
+                              <span>Quote PDF</span>
+                            </motion.button>
+
                             {canManage && st === 'QUOTE' && (
                               <motion.button
                                 whileTap={{ scale: 0.98 }}
@@ -376,24 +394,42 @@ export const SalesView: React.FC = () => {
                           )}
                         </td>
                         <td className="py-2 px-4 text-center">
-                          {bal > 0 && canManage && (
+                          <div className="flex items-center justify-center gap-1.5">
+                            {/* Tax Invoice PDF */}
                             <motion.button
                               whileTap={{ scale: 0.98 }}
-                              onClick={() => {
-                                setSelectedInvoice(inv);
-                                setPaymentForm({
-                                  amount: bal,
-                                  payment_mode: 'NEFT',
-                                  reference: `UTR-${Date.now().toString().slice(-6)}`,
-                                  notes: 'Customer payment receipt',
-                                });
-                                setIsPaymentModalOpen(true);
-                              }}
-                              className="px-3 py-1 bg-ink-light dark:bg-white text-white dark:text-ink-light rounded-pill text-[11px] font-medium shadow-sm sweep-hover"
+                              onClick={() =>
+                                downloadFile(
+                                  `/api/invoices/${inv.id}/pdf`,
+                                  `Tax_Invoice_${inv.invoice_no || inv.id}.pdf`
+                                )
+                              }
+                              className="px-2.5 py-1 bg-card-light dark:bg-card-dark border border-hairline-light dark:border-hairline-dark hover:bg-black/5 dark:hover:bg-white/10 rounded-pill text-[11px] font-medium text-ink-light dark:text-ink-dark flex items-center gap-1 shadow-sm transition-colors"
+                              title="Download Tax Invoice PDF"
                             >
-                              Record Payment
+                              <Download size={12} className="text-sage" />
+                              <span>Invoice PDF</span>
                             </motion.button>
-                          )}
+
+                            {bal > 0 && canManage && (
+                              <motion.button
+                                whileTap={{ scale: 0.98 }}
+                                onClick={() => {
+                                  setSelectedInvoice(inv);
+                                  setPaymentForm({
+                                    amount: bal,
+                                    payment_mode: 'NEFT',
+                                    reference: `UTR-${Date.now().toString().slice(-6)}`,
+                                    notes: 'Customer payment receipt',
+                                  });
+                                  setIsPaymentModalOpen(true);
+                                }}
+                                className="px-3 py-1 bg-ink-light dark:bg-white text-white dark:text-ink-light rounded-pill text-[11px] font-medium shadow-sm sweep-hover"
+                              >
+                                Record Payment
+                              </motion.button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );

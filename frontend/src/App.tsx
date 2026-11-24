@@ -6,6 +6,7 @@ import { OrbProvider, useOrb } from './context/OrbContext';
 import { Sidebar, TabKey } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
 import { FloatingAniOrb } from './components/FloatingAniOrb';
+import { DownloadToast } from './components/DownloadToast';
 import { AskAniPanel } from './views/AskAniPanel';
 import { LoginView } from './views/LoginView';
 import { ForcedPasswordModal } from './components/ForcedPasswordModal';
@@ -198,6 +199,9 @@ const MainShell: React.FC = () => {
 
       {/* Floating Animated Ani Orb Director */}
       <FloatingAniOrb />
+
+      {/* Download Toast Notifications */}
+      <DownloadToast />
 
       {/* Sliding Glass Ask Ani Chat Panel */}
       <AskAniPanel

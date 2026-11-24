@@ -10,8 +10,9 @@ import {
   Download,
   Filter,
   RefreshCw,
+  FileText,
 } from 'lucide-react';
-import { apiFetch } from '../api/client';
+import { apiFetch, downloadFile } from '../api/client';
 import { Skeleton } from '../components/Skeleton';
 
 interface MovementRecord {
@@ -91,7 +92,7 @@ export const MovementsView: React.FC = () => {
 
           <motion.button
             whileTap={{ scale: 0.98 }}
-            onClick={() => window.open('/api/inventory/export?format=csv&type=movements', '_blank')}
+            onClick={() => downloadFile('/api/export/csv/movements', 'Anishka_Stock_Movements.csv')}
             className="px-3.5 py-2 bg-ink-light dark:bg-white text-white dark:text-ink-light rounded-pill text-xs font-semibold shadow-bento sweep-hover flex items-center gap-1.5"
           >
             <Download size={13} />
@@ -174,6 +175,7 @@ export const MovementsView: React.FC = () => {
                 <th className="py-3.5 px-4">Party / Source</th>
                 <th className="py-3.5 px-4">Reference Doc</th>
                 <th className="py-3.5 px-4">Operator</th>
+                <th className="py-3.5 px-4 text-center">Note</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-hairline-light dark:divide-hairline-dark">
@@ -246,6 +248,23 @@ export const MovementsView: React.FC = () => {
 
                     <td className="py-2 px-4 text-muted">
                       {m.performed_by || m.user || 'system'}
+                    </td>
+
+                    <td className="py-2 px-4 text-center">
+                      {m.type === 'OUT' && (
+                        <button
+                          title="Download Dispatch Note PDF"
+                          onClick={() =>
+                            downloadFile(
+                              `/api/pdf/dispatch/${m.movement_id || m.id}`,
+                              `Dispatch_Note_${m.movement_id || m.id}.pdf`
+                            )
+                          }
+                          className="p-1.5 rounded-full bg-sage/10 text-sage hover:bg-sage/20 transition-colors"
+                        >
+                          <FileText size={13} />
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))

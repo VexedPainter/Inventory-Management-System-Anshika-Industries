@@ -14,6 +14,8 @@ import {
   FileText
 } from 'lucide-react';
 import { apiFetch } from '../api/client';
+import { downloadFile } from '../api/client';
+import { useAuth } from '../context/AuthContext';
 import { Skeleton } from '../components/Skeleton';
 import { Reveal } from '../components/Reveal';
 
@@ -29,6 +31,7 @@ interface AuditLog {
 }
 
 export const AuditView: React.FC = () => {
+  const { user } = useAuth();
   const [search, setSearch] = useState('');
   const [actionFilter, setActionFilter] = useState('ALL');
   const [limit, setLimit] = useState(100);
@@ -55,8 +58,10 @@ export const AuditView: React.FC = () => {
   });
 
   const handleExportCsv = () => {
-    window.open('/api/inventory/export?format=csv&type=audit', '_blank');
+    downloadFile('/api/export/csv/audit', 'Anishka_Audit_Trail.csv');
   };
+
+  const isAdminOrManager = user?.role === 'admin' || user?.role === 'manager';
 
   return (
     <div className="space-y-6">
@@ -86,6 +91,7 @@ export const AuditView: React.FC = () => {
           >
             <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} />
           </button>
+          {isAdminOrManager && (
           <button
             onClick={handleExportCsv}
             className="sweep-hover inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-ink text-white dark:bg-white dark:text-ink text-sm font-medium hover:scale-[0.98] transition-transform shadow-sm"
@@ -93,6 +99,7 @@ export const AuditView: React.FC = () => {
             <Download className="w-4 h-4" />
             Export CSV
           </button>
+          )}
         </div>
       </div>
 
