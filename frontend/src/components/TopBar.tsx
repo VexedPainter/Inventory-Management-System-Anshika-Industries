@@ -186,8 +186,9 @@ export const TopBar: React.FC<TopBarProps> = ({
         <form
           onSubmit={handleSearchSubmit}
           className={`relative flex items-center bg-card-light dark:bg-card-dark rounded-pill pl-4 pr-1.5 py-1.5 shadow-bento border ${
-            isFocused ? 'border-sage ring-2 ring-sage/10' : 'border-hairline-light dark:border-hairline-dark'
+            isFocused ? 'border-sage ring-2 ring-sage/25' : 'border-hairline-light dark:border-hairline-dark'
           } group transition-all w-64 sm:w-72 md:w-80`}
+          role="search"
         >
           <Search size={16} className="text-muted group-hover:text-ink-light dark:group-hover:text-ink-dark mr-2 shrink-0 transition-colors" />
           <input
@@ -198,7 +199,8 @@ export const TopBar: React.FC<TopBarProps> = ({
             onFocus={() => setIsFocused(true)}
             onBlur={() => setIsFocused(false)}
             placeholder="Search or ask Ani…"
-            className="text-xs bg-transparent text-ink-light dark:text-ink-dark focus:outline-none flex-1 placeholder:text-muted"
+            aria-label="Search or ask Ani"
+            className="text-xs bg-transparent text-ink-light dark:text-ink-dark outline-none flex-1 placeholder:text-muted"
           />
           {!searchVal && (
             <span className="hidden sm:inline-block text-[10px] text-muted font-mono bg-black/5 dark:bg-white/10 px-1.5 py-0.5 rounded mr-2 pointer-events-none select-none">
@@ -207,9 +209,10 @@ export const TopBar: React.FC<TopBarProps> = ({
           )}
           {/* Round black search button */}
           <motion.button
-            whileTap={{ scale: 0.98 }}
+            whileTap={{ scale: 0.92 }}
             type="submit"
-            className="w-8 h-8 rounded-full bg-ink-light dark:bg-ink-dark text-white flex items-center justify-center shrink-0 shadow-sm group-hover:scale-105 transition-transform sweep-hover"
+            className="w-8 h-8 rounded-full bg-ink-light dark:bg-ink-dark text-white flex items-center justify-center shrink-0 shadow-sm transition-all sweep-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sage focus-visible:ring-offset-1"
+            aria-label="Submit search"
             title="Search or ask Ani"
           >
             {searchVal ? <CornerDownLeft size={13} /> : <Search size={14} className="dark:text-ink-light" />}
@@ -218,20 +221,22 @@ export const TopBar: React.FC<TopBarProps> = ({
 
         {/* Notifications button */}
         <motion.button
-          whileTap={{ scale: 0.98 }}
+          whileTap={{ scale: 0.94 }}
           onClick={onNotificationsClick}
-          className="w-10 h-10 rounded-full bg-card-light dark:bg-card-dark text-ink-light dark:text-ink-dark shadow-bento border border-hairline-light dark:border-hairline-dark flex items-center justify-center hover:bg-black/5 dark:hover:bg-white/5 transition-all relative"
+          className="w-10 h-10 rounded-full bg-card-light dark:bg-card-dark text-ink-light dark:text-ink-dark shadow-bento border border-hairline-light dark:border-hairline-dark flex items-center justify-center hover:bg-black/5 dark:hover:bg-white/5 transition-all relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sage"
+          aria-label="Notifications — 1 unread"
           title="Notifications"
         >
           <Bell size={17} />
-          <span className="absolute top-2.5 right-2.5 w-2 h-2 bg-sage rounded-full" />
+          <span className="absolute top-2.5 right-2.5 w-2 h-2 bg-sage rounded-full" aria-hidden="true" />
         </motion.button>
 
         {/* Theme toggle button */}
         <motion.button
-          whileTap={{ scale: 0.98 }}
+          whileTap={{ scale: 0.94 }}
           onClick={toggleTheme}
-          className="w-10 h-10 rounded-full bg-card-light dark:bg-card-dark text-ink-light dark:text-ink-dark shadow-bento border border-hairline-light dark:border-hairline-dark flex items-center justify-center hover:bg-black/5 dark:hover:bg-white/5 transition-all"
+          className="w-10 h-10 rounded-full bg-card-light dark:bg-card-dark text-ink-light dark:text-ink-dark shadow-bento border border-hairline-light dark:border-hairline-dark flex items-center justify-center hover:bg-black/5 dark:hover:bg-white/5 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sage"
+          aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
           title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
         >
           {theme === 'dark' ? (

@@ -332,6 +332,9 @@ export const AskAniPanel: React.FC<AskAniPanelProps> = ({
               damping: 30,
               mass: 0.9,
             }}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ask-ani-title"
             className="fixed z-50 flex flex-col overflow-hidden bg-white/85 dark:bg-[#181B1A]/90 backdrop-blur-[24px] border border-hairline-light dark:border-hairline-dark shadow-2xl transition-colors
               bottom-0 left-0 right-0 h-[85vh] rounded-t-[24px]
               lg:bottom-6 lg:right-6 lg:left-auto lg:top-6 lg:h-[calc(100vh-3rem)] lg:w-[380px] lg:rounded-[24px]"
@@ -346,7 +349,7 @@ export const AskAniPanel: React.FC<AskAniPanelProps> = ({
                 <AniOrb size={32} interactive={false} isFloating={false} />
                 <div>
                   <div className="flex items-center gap-1.5">
-                    <h3 className="text-sm font-semibold text-ink-light dark:text-ink-dark">
+                    <h3 id="ask-ani-title" className="text-sm font-semibold text-ink-light dark:text-ink-dark">
                       Ani
                     </h3>
                     <span className="w-1.5 h-1.5 rounded-full bg-sage animate-pulse" />
@@ -359,9 +362,10 @@ export const AskAniPanel: React.FC<AskAniPanelProps> = ({
 
               <div className="flex items-center gap-1">
                 <motion.button
-                  whileTap={{ scale: 0.98 }}
+                  whileTap={{ scale: 0.94 }}
                   onClick={onClose}
-                  className="w-8 h-8 rounded-full flex items-center justify-center text-muted hover:text-ink-light dark:hover:text-ink-dark hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                  className="w-8 h-8 rounded-full flex items-center justify-center text-muted hover:text-ink-light dark:hover:text-ink-dark hover:bg-black/5 dark:hover:bg-white/5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sage"
+                  aria-label="Close Ask Ani"
                   title="Close Ask Ani (Esc)"
                 >
                   <X size={17} />

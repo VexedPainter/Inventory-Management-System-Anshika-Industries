@@ -9,6 +9,9 @@ import {
   Layers,
   Sparkles,
   Download,
+  AlertCircle,
+  Clock,
+  ArrowRight,
 } from 'lucide-react';
 import {
   AreaChart,
@@ -28,13 +31,34 @@ import { useAuth } from '../context/AuthContext';
 import { useOrb } from '../context/OrbContext';
 import { CountUp } from '../components/CountUp';
 import { Reveal } from '../components/Reveal';
-import { Skeleton } from '../components/Skeleton';
+import { Skeleton, StatCardSkeleton, ChartCardSkeleton } from '../components/Skeleton';
 
 interface DashboardProps {
   onNavigateTab: (tab: any) => void;
   onOpenCopilot: (initialQuery?: string) => void;
   onOpenQuickPO?: (item?: any) => void;
 }
+
+const CustomChartTooltip = ({ active, payload, label }: any) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="bg-[#181B1A]/95 backdrop-blur-md border border-white/10 p-3 rounded-2xl shadow-xl text-xs text-white">
+        <p className="font-semibold text-muted mb-1">{label}</p>
+        {payload.map((entry: any, index: number) => (
+          <div key={`item-${index}`} className="flex items-center gap-2 my-0.5">
+            <span
+              className="w-2 h-2 rounded-full"
+              style={{ backgroundColor: entry.color || entry.stroke || entry.fill }}
+            />
+            <span className="text-white/80">{entry.name}:</span>
+            <span className="font-mono font-bold text-white">{entry.value}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  return null;
+};
 
 export const DashboardView: React.FC<DashboardProps> = ({
   onNavigateTab,
@@ -95,19 +119,25 @@ export const DashboardView: React.FC<DashboardProps> = ({
   if (showSkeleton) {
     return (
       <div className="space-y-4">
-        {/* Row 1 Skeletons: 4 compact cards */}
+        {/* Row 1 Skeletons: 4 High Fidelity Stat Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <Skeleton className="h-36" rounded="card" />
-          <Skeleton className="h-36" rounded="card" />
-          <Skeleton className="h-36" rounded="card" />
-          <Skeleton className="h-36" rounded="card" />
+          <StatCardSkeleton />
+          <StatCardSkeleton />
+          <StatCardSkeleton />
+          <StatCardSkeleton />
         </div>
 
         {/* Row 2 Skeletons */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-          <Skeleton className="lg:col-span-7 h-80" rounded="card" />
-          <Skeleton className="lg:col-span-2 h-80" rounded="card" />
-          <Skeleton className="lg:col-span-3 h-80" rounded="card" />
+          <div className="lg:col-span-7">
+            <ChartCardSkeleton height="h-80" />
+          </div>
+          <div className="lg:col-span-2">
+            <ChartCardSkeleton height="h-80" />
+          </div>
+          <div className="lg:col-span-3">
+            <Skeleton className="h-80" rounded="card" />
+          </div>
         </div>
 
         {/* Row 3 Skeletons */}
@@ -157,12 +187,15 @@ export const DashboardView: React.FC<DashboardProps> = ({
   const fillRate = totalSkus > 0 ? Math.round((Math.max(0, okStock) / totalSkus) * 100) : 94;
 
   const donutData = [
-    { name: 'Fulfilled', value: fillRate, color: '#5F7F6D' },
+    { name: 'Fulfilled', value: fillRate, color: '#4A7260' },
     { name: 'Remaining', value: 100 - fillRate, color: 'rgba(0,0,0,0.06)' },
   ];
 
+  // Needs Attention Count
+  const needsAttentionTotal = lowStockCount + outOfStockCount;
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {/* Top Header Action Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-1">
         <div>
@@ -171,17 +204,17 @@ export const DashboardView: React.FC<DashboardProps> = ({
         </div>
         <div className="flex items-center gap-2">
           <motion.button
-            whileTap={{ scale: 0.98 }}
+            whileTap={{ scale: 0.94 }}
             onClick={() => downloadFile('/api/pdf/dashboard-report', 'Valuation_Dashboard_Report.pdf')}
-            className="px-3.5 py-2 bg-ink-light dark:bg-white text-white dark:text-ink-light rounded-pill text-xs font-semibold shadow-bento sweep-hover flex items-center gap-1.5"
+            className="px-3.5 py-2 bg-ink-light dark:bg-white text-white dark:text-ink-light rounded-pill text-xs font-semibold shadow-bento sweep-hover flex items-center gap-1.5 focus-visible:ring-2 focus-visible:ring-sage"
           >
             <Download size={13} />
             <span>Valuation PDF</span>
           </motion.button>
           <motion.button
-            whileTap={{ scale: 0.98 }}
+            whileTap={{ scale: 0.94 }}
             onClick={() => downloadFile('/api/export/excel/comprehensive', 'Anishka_Comprehensive_Ledger.xlsx')}
-            className="px-3.5 py-2 bg-card-light dark:bg-card-dark border border-hairline-light dark:border-hairline-dark hover:bg-black/5 dark:hover:bg-white/5 text-ink-light dark:text-ink-dark rounded-pill text-xs font-semibold shadow-bento sweep-hover flex items-center gap-1.5"
+            className="px-3.5 py-2 bg-card-light dark:bg-card-dark border border-hairline-light dark:border-hairline-dark hover:bg-black/5 dark:hover:bg-white/5 text-ink-light dark:text-ink-dark rounded-pill text-xs font-semibold shadow-bento sweep-hover flex items-center gap-1.5 focus-visible:ring-2 focus-visible:ring-sage"
           >
             <Download size={13} />
             <span>Excel Ledger</span>
@@ -190,11 +223,53 @@ export const DashboardView: React.FC<DashboardProps> = ({
       </div>
 
       {/* ==================================================================== */}
-      {/* ROW 1: 4 Compact Bento Cards                                         */}
+      {/* AT-A-GLANCE "NEEDS ATTENTION" STRIP                                  */}
+      {/* ==================================================================== */}
+      {needsAttentionTotal > 0 && (
+        <Reveal index={0}>
+          <div className="bg-attention-bg dark:bg-attention-bg-dark border border-attention-border/60 dark:border-attention-border-dark rounded-2xl p-3.5 px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+            <div className="flex items-center gap-3">
+              <span className="relative flex h-3 w-3 shrink-0">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-negative opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-negative"></span>
+              </span>
+              <div>
+                <p className="text-xs font-bold text-ink-light dark:text-ink-dark flex items-center gap-1.5">
+                  Needs Attention: <span className="text-negative font-mono">{needsAttentionTotal} SKUs</span> require immediate replenishment action
+                </p>
+                <p className="text-[11px] text-muted">
+                  {outOfStockCount > 0 && <span className="font-semibold text-negative">{outOfStockCount} critical items out of stock</span>}
+                  {outOfStockCount > 0 && lowStockCount > 0 && <span> • </span>}
+                  {lowStockCount > 0 && <span>{lowStockCount} items below safety threshold</span>}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 self-end sm:self-auto">
+              <button
+                onClick={() => openChat('Draft emergency purchase orders for all out of stock and low stock SKUs')}
+                className="px-3 py-1 bg-negative text-white rounded-pill text-[11px] font-semibold flex items-center gap-1.5 shadow-sm hover:opacity-90 transition-opacity"
+              >
+                <Sparkles size={12} />
+                <span>Auto-Draft POs</span>
+              </button>
+              <button
+                onClick={() => onNavigateTab('inventory')}
+                className="px-3 py-1 bg-black/5 dark:bg-white/10 hover:bg-black/10 text-ink-light dark:text-ink-dark rounded-pill text-[11px] font-medium transition-colors flex items-center gap-1"
+              >
+                <span>Filter Inventory</span>
+                <ArrowRight size={12} />
+              </button>
+            </div>
+          </div>
+        </Reveal>
+      )}
+
+      {/* ==================================================================== */}
+      {/* ROW 1: 4 Refined Bento Cards with Bold Numbers                       */}
       {/* ==================================================================== */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Card 1: Stock value */}
-        <Reveal index={0}>
+        <Reveal index={1}>
           <motion.div
             whileHover={{ y: -4 }}
             transition={{ duration: 0.2 }}
@@ -215,26 +290,28 @@ export const DashboardView: React.FC<DashboardProps> = ({
             </button>
 
             <div className="flex items-center justify-between">
-              <span className="text-xs text-muted font-medium">Stock value</span>
+              <span className="text-xs text-muted font-medium uppercase tracking-wider">Total Valuation</span>
               <div className="w-8 h-8 rounded-full bg-sage/10 text-sage flex items-center justify-center">
                 <Layers size={16} />
               </div>
             </div>
             <div className="mt-3">
-              <div className="text-2xl font-semibold text-ink-light dark:text-ink-dark">
+              <div className="text-3xl font-extrabold text-ink-light dark:text-ink-dark tracking-tight">
                 <CountUp value={stockValuation} prefix="₹" duration={900} />
               </div>
-              <div className="text-xs text-muted mt-0.5 flex items-center gap-1.5">
+              <div className="text-xs text-muted mt-1 flex items-center gap-1.5 font-medium">
+                <span className="text-positive font-semibold font-mono">Live</span>
+                <span>•</span>
                 <span>{totalSkus} active SKUs in store</span>
               </div>
             </div>
-            {/* Micro bar sparkline with growth from baseline */}
+            {/* Micro bar sparkline */}
             <div className="h-6 mt-3">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={last7Bars.length ? last7Bars : [{ val: 4 }, { val: 7 }, { val: 5 }, { val: 8 }, { val: 6 }, { val: 9 }, { val: 8 }]}>
                   <Bar
                     dataKey="val"
-                    fill="#5F7F6D"
+                    fill="#4A7260"
                     radius={[2, 2, 0, 0]}
                     opacity={0.65}
                     isAnimationActive={true}
@@ -247,8 +324,8 @@ export const DashboardView: React.FC<DashboardProps> = ({
           </motion.div>
         </Reveal>
 
-        {/* Card 2: Low stock (Target of Ani glide choreo) */}
-        <Reveal index={1}>
+        {/* Card 2: Low stock */}
+        <Reveal index={2}>
           <motion.div
             id="bento-low-stock"
             data-card="low-stock"
@@ -271,20 +348,19 @@ export const DashboardView: React.FC<DashboardProps> = ({
             </button>
 
             <div className="flex items-center justify-between">
-              <span className="text-xs text-muted font-medium">Low stock</span>
+              <span className="text-xs text-muted font-medium uppercase tracking-wider">Low Stock</span>
               <div className="w-8 h-8 rounded-full bg-warning/10 text-warning flex items-center justify-center">
                 <AlertTriangle size={16} />
               </div>
             </div>
             <div className="mt-3">
-              <div className="text-2xl font-semibold text-ink-light dark:text-ink-dark">
+              <div className="text-3xl font-extrabold text-ink-light dark:text-ink-dark tracking-tight">
                 <CountUp value={lowStockCount} duration={900} />
               </div>
-              <div className="text-xs text-warning mt-0.5 font-medium flex items-center gap-1">
+              <div className="text-xs text-warning mt-1 font-semibold flex items-center gap-1">
                 <span>Below reorder buffer</span>
               </div>
             </div>
-            {/* Subtle line sparkline */}
             <div className="h-6 mt-3 flex items-center">
               <div className="w-full bg-black/5 dark:bg-white/5 h-1.5 rounded-full overflow-hidden">
                 <div
@@ -297,7 +373,7 @@ export const DashboardView: React.FC<DashboardProps> = ({
         </Reveal>
 
         {/* Card 3: Out of stock */}
-        <Reveal index={2}>
+        <Reveal index={3}>
           <motion.div
             whileHover={{ y: -4 }}
             transition={{ duration: 0.2 }}
@@ -318,16 +394,16 @@ export const DashboardView: React.FC<DashboardProps> = ({
             </button>
 
             <div className="flex items-center justify-between">
-              <span className="text-xs text-muted font-medium">Out of stock</span>
+              <span className="text-xs text-muted font-medium uppercase tracking-wider">Out of Stock</span>
               <div className="w-8 h-8 rounded-full bg-negative/10 text-negative flex items-center justify-center">
                 <XCircle size={16} />
               </div>
             </div>
             <div className="mt-3">
-              <div className="text-2xl font-semibold text-ink-light dark:text-ink-dark">
+              <div className="text-3xl font-extrabold text-negative tracking-tight">
                 <CountUp value={outOfStockCount} duration={900} />
               </div>
-              <div className="text-xs text-negative mt-0.5 font-medium flex items-center gap-1">
+              <div className="text-xs text-negative mt-1 font-semibold flex items-center gap-1">
                 <span>Immediate procurement needed</span>
               </div>
             </div>
@@ -343,14 +419,14 @@ export const DashboardView: React.FC<DashboardProps> = ({
         </Reveal>
 
         {/* Card 4: Featured Deep-Sage "Pending POs" */}
-        <Reveal index={3}>
+        <Reveal index={4}>
           <motion.div
             whileHover={{ y: -4 }}
             transition={{ duration: 0.2 }}
             onClick={() => onNavigateTab('procurement')}
-            className="group relative rounded-card p-5 shadow-bento hover:shadow-bento-hover cursor-pointer flex flex-col justify-between text-white relative overflow-hidden h-full"
+            className="group relative rounded-card p-5 shadow-bento hover:shadow-bento-hover cursor-pointer flex flex-col justify-between text-white overflow-hidden h-full"
             style={{
-              background: 'linear-gradient(135deg, #6F8F7C 0%, #4F6E5C 100%)',
+              background: 'linear-gradient(135deg, #4A7260 0%, #3A5F4E 100%)',
             }}
           >
             {/* Ask Ani on hover button */}
@@ -367,20 +443,20 @@ export const DashboardView: React.FC<DashboardProps> = ({
             </button>
 
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-white/80">Pending POs</span>
-              <span className="text-[10px] font-semibold bg-white/20 text-white px-2 py-0.5 rounded-full">
+              <span className="text-xs font-semibold text-white/80 uppercase tracking-wider">Pending POs</span>
+              <span className="text-[10px] font-bold bg-white/20 text-white px-2 py-0.5 rounded-full">
                 {pendingPOCount} Active
               </span>
             </div>
             <div className="mt-3">
-              <div className="text-2xl font-semibold text-white">
+              <div className="text-3xl font-extrabold text-white tracking-tight">
                 <CountUp value={pendingPOValue} prefix="₹" duration={900} />
               </div>
-              <div className="text-xs text-white/80 mt-0.5">
+              <div className="text-xs text-white/80 mt-1 font-medium">
                 Inward pipeline value
               </div>
             </div>
-            <div className="mt-3 flex items-center justify-between text-[11px] text-white/90 font-medium">
+            <div className="mt-3 flex items-center justify-between text-[11px] text-white/90 font-semibold">
               <span>View procurement</span>
               <ArrowUpRight size={14} />
             </div>
@@ -393,20 +469,20 @@ export const DashboardView: React.FC<DashboardProps> = ({
       {/* ==================================================================== */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
         {/* Main Chart: Stock Movement */}
-        <Reveal index={4} className="lg:col-span-7">
+        <Reveal index={5} className="lg:col-span-7">
           <motion.div
             whileHover={{ y: -4 }}
             transition={{ duration: 0.2 }}
-            className="group relative bg-card-light dark:bg-card-dark rounded-card p-6 shadow-bento hover:shadow-bento-hover border border-hairline-light dark:border-hairline-dark flex flex-col justify-between relative overflow-hidden h-full"
+            className="group relative bg-card-light dark:bg-card-dark rounded-card p-6 shadow-bento hover:shadow-bento-hover border border-hairline-light dark:border-hairline-dark flex flex-col justify-between overflow-hidden h-full"
           >
             {/* Header & Badges */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
               <div>
                 <div className="flex items-center gap-2">
-                  <h3 className="text-base font-semibold text-ink-light dark:text-ink-dark">
-                    Stock movement
+                  <h3 className="text-base font-bold text-ink-light dark:text-ink-dark">
+                    Stock Movement Velocity
                   </h3>
-                  <span className="text-[11px] font-medium text-positive bg-positive/10 px-2 py-0.5 rounded-full flex items-center gap-0.5">
+                  <span className="text-[11px] font-semibold text-positive bg-positive/10 px-2 py-0.5 rounded-full flex items-center gap-0.5">
                     <ArrowUpRight size={12} /> On track
                   </span>
                 </div>
@@ -414,7 +490,6 @@ export const DashboardView: React.FC<DashboardProps> = ({
                   Daily inventory inward receipts vs outward dispatches
                 </p>
               </div>
-
             </div>
 
             {/* Floating metrics chip */}
@@ -436,35 +511,27 @@ export const DashboardView: React.FC<DashboardProps> = ({
               </div>
             </div>
 
-            {/* Line / Area Chart with 900ms sweep */}
+            {/* Line / Area Chart with custom styled tooltip */}
             <div className="h-60 w-full mt-2">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={trendData.length ? trendData : [{ date: '01', inward: 12, outward: 8 }]}>
                   <defs>
                     <linearGradient id="sageGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#5F7F6D" stopOpacity={0.35} />
-                      <stop offset="95%" stopColor="#5F7F6D" stopOpacity={0.0} />
+                      <stop offset="5%" stopColor="#4A7260" stopOpacity={0.35} />
+                      <stop offset="95%" stopColor="#4A7260" stopOpacity={0.0} />
                     </linearGradient>
                     <linearGradient id="outwardGradient" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="#6A5BFF" stopOpacity={0.2} />
                       <stop offset="95%" stopColor="#6A5BFF" stopOpacity={0.0} />
                     </linearGradient>
                   </defs>
-                  <XAxis dataKey="date" stroke="#8B8B86" fontSize={11} tickLine={false} axisLine={false} />
-                  <YAxis stroke="#8B8B86" fontSize={11} tickLine={false} axisLine={false} width={28} />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: '#181B1A',
-                      borderColor: 'rgba(255,255,255,0.1)',
-                      borderRadius: '12px',
-                      color: '#fff',
-                      fontSize: '12px',
-                    }}
-                  />
+                  <XAxis dataKey="date" stroke="#767672" fontSize={11} tickLine={false} axisLine={false} />
+                  <YAxis stroke="#767672" fontSize={11} tickLine={false} axisLine={false} width={28} />
+                  <Tooltip content={<CustomChartTooltip />} />
                   <Area
                     type="monotone"
                     dataKey="inward"
-                    stroke="#5F7F6D"
+                    stroke="#4A7260"
                     strokeWidth={2.5}
                     fillOpacity={1}
                     fill="url(#sageGradient)"
@@ -493,7 +560,7 @@ export const DashboardView: React.FC<DashboardProps> = ({
         </Reveal>
 
         {/* Card 2: Fill Rate Half-Donut Gauge (2 cols) */}
-        <Reveal index={5} className="lg:col-span-2">
+        <Reveal index={6} className="lg:col-span-2">
           <motion.div
             whileHover={{ y: -4 }}
             transition={{ duration: 0.2 }}
@@ -512,8 +579,8 @@ export const DashboardView: React.FC<DashboardProps> = ({
             </button>
 
             <div>
-              <h3 className="text-sm font-semibold text-ink-light dark:text-ink-dark">
-                Fill rate
+              <h3 className="text-sm font-bold text-ink-light dark:text-ink-dark">
+                Fill Rate SLA
               </h3>
               <p className="text-xs text-muted mt-0.5">
                 Catalog readiness
@@ -538,27 +605,27 @@ export const DashboardView: React.FC<DashboardProps> = ({
                     animationDuration={900}
                     animationEasing="ease-out"
                   >
-                    <Cell fill="#5F7F6D" />
+                    <Cell fill="#4A7260" />
                     <Cell fill="rgba(0,0,0,0.08)" />
                   </Pie>
                 </PieChart>
               </ResponsiveContainer>
               <div className="absolute inset-x-0 bottom-4 text-center">
-                <div className="text-2xl font-bold font-mono text-ink-light dark:text-ink-dark">
+                <div className="text-3xl font-extrabold font-mono text-ink-light dark:text-ink-dark">
                   <CountUp value={fillRate} suffix="%" duration={900} />
                 </div>
-                <div className="text-[10px] text-muted font-medium">Target 95%</div>
+                <div className="text-[10px] text-muted font-semibold">Target 95%</div>
               </div>
             </div>
 
-            <div className="text-center text-xs text-muted pt-2 border-t border-hairline-light dark:border-hairline-dark">
-              <span className="font-semibold text-positive">+{fillRate - 85}%</span> from last month
+            <div className="text-center text-xs text-muted pt-2 border-t border-hairline-light dark:border-hairline-dark font-medium">
+              <span className="font-bold text-positive">+{fillRate - 85}%</span> from last month
             </div>
           </motion.div>
         </Reveal>
 
         {/* Card 3: User Profile Badge (3 cols) */}
-        <Reveal index={6} className="lg:col-span-3">
+        <Reveal index={7} className="lg:col-span-3">
           <motion.div
             whileHover={{ y: -4 }}
             transition={{ duration: 0.2 }}
@@ -568,13 +635,13 @@ export const DashboardView: React.FC<DashboardProps> = ({
               <div className="w-16 h-16 rounded-full bg-sage/20 border-2 border-sage/40 flex items-center justify-center text-sage text-xl font-bold mb-3 shadow-sm">
                 {user?.username ? user.username.slice(0, 2).toUpperCase() : 'AI'}
               </div>
-              <h3 className="text-base font-semibold text-ink-light dark:text-ink-dark">
+              <h3 className="text-base font-bold text-ink-light dark:text-ink-dark">
                 {user?.full_name || user?.username || 'Operator'}
               </h3>
-              <span className="text-xs text-muted mt-0.5 uppercase tracking-wide font-mono">
+              <span className="text-xs text-muted mt-0.5 uppercase tracking-wide font-mono font-semibold">
                 {user?.role || 'storekeeper'}
               </span>
-              <div className="inline-block mt-2 px-2.5 py-0.5 bg-sage/10 text-sage text-[11px] font-medium rounded-pill">
+              <div className="inline-block mt-2 px-2.5 py-0.5 bg-sage/10 text-sage text-[11px] font-semibold rounded-pill">
                 Gurugram Central Store
               </div>
             </div>
@@ -582,22 +649,22 @@ export const DashboardView: React.FC<DashboardProps> = ({
             {/* 3 Mini Stats */}
             <div className="grid grid-cols-3 gap-2 pt-4 border-t border-hairline-light dark:border-hairline-dark mt-4">
               <div className="text-center">
-                <div className="text-base font-semibold font-mono text-ink-light dark:text-ink-dark">
+                <div className="text-base font-bold font-mono text-ink-light dark:text-ink-dark">
                   <CountUp value={totalSkus} duration={900} />
                 </div>
-                <div className="text-[10px] text-muted">SKUs</div>
+                <div className="text-[10px] text-muted font-medium">SKUs</div>
               </div>
               <div className="text-center border-x border-hairline-light dark:border-hairline-dark">
-                <div className="text-base font-semibold font-mono text-ink-light dark:text-ink-dark">
+                <div className="text-base font-bold font-mono text-ink-light dark:text-ink-dark">
                   <CountUp value={pendingPOCount} duration={900} />
                 </div>
-                <div className="text-[10px] text-muted">Active POs</div>
+                <div className="text-[10px] text-muted font-medium">Active POs</div>
               </div>
               <div className="text-center">
-                <div className="text-base font-semibold font-mono text-ink-light dark:text-ink-dark">
+                <div className="text-base font-bold font-mono text-ink-light dark:text-ink-dark">
                   <CountUp value={ownerData?.metrics?.sales?.invoice_count ?? (dashData?.sales_funnel?.confirmed_orders || 0)} duration={900} />
                 </div>
-                <div className="text-[10px] text-muted">Invoices</div>
+                <div className="text-[10px] text-muted font-medium">Invoices</div>
               </div>
             </div>
           </motion.div>
@@ -609,7 +676,7 @@ export const DashboardView: React.FC<DashboardProps> = ({
       {/* ==================================================================== */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
         {/* Reorder Suggestions (5 cols) */}
-        <Reveal index={7} className="lg:col-span-5">
+        <Reveal index={8} className="lg:col-span-5">
           <motion.div
             whileHover={{ y: -4 }}
             transition={{ duration: 0.2 }}
@@ -630,7 +697,7 @@ export const DashboardView: React.FC<DashboardProps> = ({
             <div>
               <div className="flex items-center justify-between mb-3">
                 <div>
-                  <h3 className="text-sm font-semibold text-ink-light dark:text-ink-dark">
+                  <h3 className="text-sm font-bold text-ink-light dark:text-ink-dark">
                     Reorder suggestions
                   </h3>
                   <p className="text-xs text-muted">Calculated by lead time & run-rate</p>
@@ -662,9 +729,8 @@ export const DashboardView: React.FC<DashboardProps> = ({
                           <span>Reorder: {item.reorder_level}</span>
                         </div>
                       </div>
-                      {/* Black pill button with hover light sweep & .98 press scale */}
                       <motion.button
-                        whileTap={{ scale: 0.98 }}
+                        whileTap={{ scale: 0.94 }}
                         onClick={() => onOpenQuickPO ? onOpenQuickPO(item) : onNavigateTab('procurement')}
                         className="sweep-hover px-3 py-1 bg-ink-light dark:bg-ink-dark text-white text-[11px] font-medium rounded-pill shrink-0 shadow-sm transition-transform"
                       >
@@ -673,7 +739,7 @@ export const DashboardView: React.FC<DashboardProps> = ({
                     </div>
                   ))
                 ) : (
-                  <div className="text-center py-6 text-xs text-muted">
+                  <div className="text-center py-6 text-xs text-muted font-medium">
                     All critical SKUs are currently above reorder buffers.
                   </div>
                 )}
@@ -682,13 +748,13 @@ export const DashboardView: React.FC<DashboardProps> = ({
 
             <div className="mt-3 pt-3 border-t border-hairline-light dark:border-hairline-dark flex items-center justify-between text-xs text-muted">
               <span>Automated reorder triggers active</span>
-              <span className="text-positive font-medium">Every 6 hrs</span>
+              <span className="text-positive font-bold">Every 6 hrs</span>
             </div>
           </motion.div>
         </Reveal>
 
         {/* Top Customers / Receivables (4 cols) */}
-        <Reveal index={8} className="lg:col-span-4">
+        <Reveal index={9} className="lg:col-span-4">
           <motion.div
             whileHover={{ y: -4 }}
             transition={{ duration: 0.2 }}
@@ -709,7 +775,7 @@ export const DashboardView: React.FC<DashboardProps> = ({
             <div>
               <div className="flex items-center justify-between mb-3">
                 <div>
-                  <h3 className="text-sm font-semibold text-ink-light dark:text-ink-dark">
+                  <h3 className="text-sm font-bold text-ink-light dark:text-ink-dark">
                     Top receivables
                   </h3>
                   <p className="text-xs text-muted">Customer payment balances</p>
@@ -741,14 +807,14 @@ export const DashboardView: React.FC<DashboardProps> = ({
                         <div className="text-xs font-semibold font-mono text-ink-light dark:text-ink-dark">
                           ₹{(cust.current_balance || 0).toLocaleString('en-IN')}
                         </div>
-                        <span className="text-[10px] text-warning bg-warning/10 px-1.5 py-0.2 rounded font-medium">
+                        <span className="text-[10px] text-warning bg-warning/10 px-1.5 py-0.2 rounded font-semibold">
                           Due
                         </span>
                       </div>
                     </div>
                   ))
                 ) : (
-                  <div className="text-center py-6 text-xs text-muted">
+                  <div className="text-center py-6 text-xs text-muted font-medium">
                     No overdue customer receivables.
                   </div>
                 )}
@@ -757,7 +823,7 @@ export const DashboardView: React.FC<DashboardProps> = ({
 
             <div className="mt-3 pt-3 border-t border-hairline-light dark:border-hairline-dark flex items-center justify-between text-xs text-muted">
               <span>Total Overdue</span>
-              <span className="font-mono font-semibold text-ink-light dark:text-ink-dark">
+              <span className="font-mono font-bold text-ink-light dark:text-ink-dark">
                 {ownerData?.metrics?.receivables?.total_overdue_value != null
                   ? `₹${Number(ownerData.metrics.receivables.total_overdue_value).toLocaleString('en-IN')}`
                   : (dashData?.receivables_ageing?.overdue_60_plus_days != null
@@ -769,32 +835,32 @@ export const DashboardView: React.FC<DashboardProps> = ({
         </Reveal>
 
         {/* Keep Stock Safe! CTA Card (3 cols) */}
-        <Reveal index={9} className="lg:col-span-3">
+        <Reveal index={10} className="lg:col-span-3">
           <motion.div
             whileHover={{ y: -4 }}
             transition={{ duration: 0.2 }}
-            className="group relative rounded-card p-5 shadow-bento flex flex-col justify-between text-white relative overflow-hidden h-full"
+            className="group relative rounded-card p-5 shadow-bento flex flex-col justify-between text-white overflow-hidden h-full"
             style={{
-              background: 'linear-gradient(135deg, #6F8F7C 0%, #4F6E5C 100%)',
+              background: 'linear-gradient(135deg, #4A7260 0%, #3A5F4E 100%)',
             }}
           >
             <div>
               <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center mb-3">
                 <ShieldCheck size={20} className="text-white" />
               </div>
-              <h3 className="text-base font-semibold text-white">
+              <h3 className="text-base font-bold text-white">
                 Keep stock safe!
               </h3>
-              <p className="text-xs text-white/80 mt-1">
+              <p className="text-xs text-white/80 mt-1 leading-relaxed font-medium">
                 Automated safety buffer calculation scans sales cadence and lead times to prevent stockouts.
               </p>
             </div>
 
             <div className="mt-4">
               <motion.button
-                whileTap={{ scale: 0.98 }}
+                whileTap={{ scale: 0.94 }}
                 onClick={() => openChat('Run automated stock safety scan and draft replenishment POs')}
-                className="sweep-hover w-full py-2.5 px-4 bg-ink-light text-white text-xs font-medium rounded-pill shadow-sm transition-all flex items-center justify-center gap-2"
+                className="sweep-hover w-full py-2.5 px-4 bg-ink-light text-white text-xs font-semibold rounded-pill shadow-sm transition-all flex items-center justify-center gap-2 focus-visible:ring-2 focus-visible:ring-white"
               >
                 <Sparkles size={14} className="text-[#8FE3FF]" />
                 <span>Run auto-reorder</span>

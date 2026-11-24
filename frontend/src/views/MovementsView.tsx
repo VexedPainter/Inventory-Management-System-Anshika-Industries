@@ -189,15 +189,33 @@ export const MovementsView: React.FC = () => {
                 ))
               ) : filteredMovements.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-16 text-center text-xs text-muted">
-                    No matching stock movement records found.
+                  <td colSpan={9} className="py-16 text-center">
+                    <div className="flex flex-col items-center gap-3 text-muted">
+                      <div className="w-12 h-12 rounded-full bg-black/5 dark:bg-white/5 flex items-center justify-center">
+                        <FileText size={20} className="opacity-50" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-ink-light dark:text-ink-dark">No movement records</p>
+                        <p className="text-xs text-muted mt-0.5">
+                          {search ? `No records match "${search}" — try a different SKU or reference.` : 'No stock movements have been recorded yet.'}
+                        </p>
+                      </div>
+                      {search && (
+                        <button
+                          onClick={() => setSearch('')}
+                          className="px-3 py-1.5 text-xs font-semibold text-sage border border-sage/40 rounded-full hover:bg-sage/5 transition-colors"
+                        >
+                          Clear filter
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ) : (
                 filteredMovements.map((m, idx) => (
                   <tr
                     key={m.movement_id || m.id || idx}
-                    className="h-14 hover:bg-black/2 dark:hover:bg-white/2 transition-colors"
+                    className="h-14 table-row-hover"
                   >
                     <td className="py-2 px-4 font-mono text-muted text-[11px]">
                       {m.timestamp}

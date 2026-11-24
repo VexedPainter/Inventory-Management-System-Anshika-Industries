@@ -89,10 +89,10 @@ export const LoginView: React.FC = () => {
 
         {/* Title & Subtitle */}
         <div className="text-center mb-6">
-          <h1 className="text-xl font-bold tracking-tight text-ink-light dark:text-ink-dark">
+          <h1 className="text-2xl font-extrabold tracking-tight text-ink-light dark:text-ink-dark">
             Anishka Inventory
           </h1>
-          <p className="text-xs text-muted mt-1">
+          <p className="text-xs text-muted mt-1 font-medium">
             Enterprise Industrial Welding Spares ERP
           </p>
         </div>
@@ -112,14 +112,14 @@ export const LoginView: React.FC = () => {
               Username
             </label>
             <div className="relative flex items-center">
-              <User size={15} className="absolute left-3.5 text-muted" />
+              <User size={15} className="absolute left-3.5 text-muted pointer-events-none" />
               <input
                 type="text"
                 value={username}
                 onChange={e => setUsername(e.target.value)}
                 required
                 placeholder="admin, manager, storekeeper"
-                className="w-full pl-10 pr-4 py-2.5 bg-canvas-light/60 dark:bg-black/20 border border-hairline-light dark:border-hairline-dark rounded-pill text-xs sm:text-sm text-ink-light dark:text-ink-dark focus:outline-none focus:border-sage transition-colors"
+                className="w-full pl-10 pr-4 py-2.5 bg-canvas-light/60 dark:bg-black/20 border border-hairline-light dark:border-hairline-dark rounded-pill text-xs sm:text-sm text-ink-light dark:text-ink-dark focus:border-sage focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sage/20 transition-all"
               />
             </div>
           </div>
@@ -129,14 +129,14 @@ export const LoginView: React.FC = () => {
               Password
             </label>
             <div className="relative flex items-center">
-              <Lock size={15} className="absolute left-3.5 text-muted" />
+              <Lock size={15} className="absolute left-3.5 text-muted pointer-events-none" />
               <input
                 type="password"
                 value={password}
                 onChange={e => setPassword(e.target.value)}
                 required
                 placeholder="Enter password"
-                className="w-full pl-10 pr-4 py-2.5 bg-canvas-light/60 dark:bg-black/20 border border-hairline-light dark:border-hairline-dark rounded-pill text-xs sm:text-sm text-ink-light dark:text-ink-dark focus:outline-none focus:border-sage transition-colors"
+                className="w-full pl-10 pr-4 py-2.5 bg-canvas-light/60 dark:bg-black/20 border border-hairline-light dark:border-hairline-dark rounded-pill text-xs sm:text-sm text-ink-light dark:text-ink-dark focus:border-sage focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sage/20 transition-all"
               />
             </div>
           </div>

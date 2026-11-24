@@ -871,7 +871,14 @@ export const FloatingAniOrb: React.FC = () => {
           </AnimatePresence>
 
           {/* The Layered Orb Character (Body, Face, Arms, Shadow) */}
-          <div className="pointer-events-auto" onClick={() => openChat()}>
+          <div
+            className="pointer-events-auto"
+            onClick={() => openChat()}
+            role="button"
+            tabIndex={0}
+            aria-label="Open Ani AI Assistant"
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openChat(); } }}
+          >
             <OrbCharacter
               size={56}
               expression={expression}

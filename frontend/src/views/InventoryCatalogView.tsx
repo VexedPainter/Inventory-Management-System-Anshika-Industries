@@ -614,7 +614,7 @@ export const InventoryCatalogView: React.FC = () => {
                         animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
                         exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, height: 0 }}
                         transition={{ duration: 0.2, delay: Math.min(idx * 0.02, 0.2) }}
-                        className="h-14 hover:bg-black/2 dark:hover:bg-white/2 transition-colors group"
+                        className="h-14 table-row-hover group"
                       >
                         {/* SKU */}
                         <td className="py-2 px-4 font-mono font-semibold text-sage">
