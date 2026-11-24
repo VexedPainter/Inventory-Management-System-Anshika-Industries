@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -p tsconfig.app.json --noEmit && vite build && node scripts/check-screens.mjs",
+    "build": "tsc -p tsconfig.app.json --noEmit && vite build && node scripts/check-screens.mjs && node scripts/check-api-routes.mjs",
     "check-screens": "node scripts/check-screens.mjs",
     "preview": "vite preview"
   },

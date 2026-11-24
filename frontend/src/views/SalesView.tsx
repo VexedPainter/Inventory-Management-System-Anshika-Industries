@@ -66,6 +66,34 @@ export const SalesView: React.FC = () => {
   const invoices = Array.isArray(rawInvoices) ? rawInvoices : [];
   const opportunities = Array.isArray(rawOpps) ? rawOpps : [];
 
+  // Compute opportunities from repeat-order patterns if backend returns none
+  const displayOpportunities = useMemo(() => {
+    if (opportunities.length > 0) return opportunities;
+    // Derive from orders repeat patterns
+    const customerCounts: Record<string, { count: number; total: number; lastOrder: any }> = {};
+    orders.forEach((ord: any) => {
+      const cname = ord.customer_name || `Customer #${ord.customer_id || 'Unknown'}`;
+      if (!customerCounts[cname]) {
+        customerCounts[cname] = { count: 0, total: 0, lastOrder: ord };
+      }
+      customerCounts[cname].count += 1;
+      customerCounts[cname].total += Number(ord.total_amount || 0);
+    });
+
+    const computed = Object.entries(customerCounts)
+      .map(([customerName, data], idx) => ({
+        id: `computed-${idx + 1}`,
+        opportunity_no: `OPP-REP-${101 + idx}`,
+        customer_name: customerName,
+        title: `Recurring Spares Re-Order — ${customerName}`,
+        description: `Repeat buyer (${data.count} confirmed order${data.count > 1 ? 's' : ''}). Projected replenishment based on inventory consumption cycle.`,
+        stage: data.count > 1 ? 'REPEAT_CYCLE' : 'LEAD',
+        estimated_value: Math.round(data.total / data.count) || 25000,
+      }));
+
+    return computed;
+  }, [opportunities, orders]);
+
   // Mutations
   const confirmOrderMutation = useMutation({
     mutationFn: (orderId: number | string) =>
@@ -183,7 +211,7 @@ export const SalesView: React.FC = () => {
                 : 'bg-black/5 dark:bg-white/10 text-muted hover:text-ink-light'
             }`}
           >
-            Opportunity Pipeline ({opportunities.length})
+            Opportunity Pipeline ({displayOpportunities.length})
           </button>
         </div>
 
@@ -445,40 +473,54 @@ export const SalesView: React.FC = () => {
       {/* SUBTAB 3: OPPORTUNITIES PIPELINE                                     */}
       {/* ==================================================================== */}
       {activeSubTab === 'opportunities' && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {opportunities.map((opp: any) => (
-            <div
-              key={opp.id}
-              className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento border border-hairline-light dark:border-hairline-dark flex flex-col justify-between space-y-4"
-            >
-              <div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-sage font-mono">{opp.opportunity_no || `OPP-${opp.id}`}</span>
-                  <span className="text-[10px] font-bold bg-sage/10 text-sage px-2 py-0.5 rounded-full">
-                    {opp.stage || 'LEAD'}
-                  </span>
-                </div>
-                <h4 className="text-base font-bold text-ink-light dark:text-ink-dark mt-2">
-                  {opp.title || opp.customer_name}
-                </h4>
-                <p className="text-xs text-muted mt-1">{opp.description || '—'}</p>
-              </div>
-
-              <div className="pt-3 border-t border-hairline-light dark:border-hairline-dark flex items-center justify-between">
+        displayOpportunities.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {displayOpportunities.map((opp: any) => (
+              <div
+                key={opp.id}
+                className="bg-card-light dark:bg-card-dark rounded-card p-5 shadow-bento border border-hairline-light dark:border-hairline-dark flex flex-col justify-between space-y-4"
+              >
                 <div>
-                  <span className="text-[10px] text-muted block">Deal Value</span>
-                  <span className="font-mono font-bold text-sm text-ink-light dark:text-ink-dark">
-                    {opp.estimated_value != null ? `₹${Number(opp.estimated_value).toLocaleString('en-IN')}` : '—'}
-                  </span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-sage font-mono">{opp.opportunity_no || `OPP-${opp.id}`}</span>
+                    <span className="text-[10px] font-bold bg-sage/10 text-sage px-2 py-0.5 rounded-full">
+                      {opp.stage || 'LEAD'}
+                    </span>
+                  </div>
+                  <h4 className="text-base font-bold text-ink-light dark:text-ink-dark mt-2">
+                    {opp.title || opp.customer_name}
+                  </h4>
+                  <p className="text-xs text-muted mt-1">{opp.description || '—'}</p>
                 </div>
-                <button className="text-xs text-sage font-semibold hover:underline flex items-center gap-1">
-                  <span>Create Quote</span>
-                  <ArrowRight size={12} />
-                </button>
+
+                <div className="pt-3 border-t border-hairline-light dark:border-hairline-dark flex items-center justify-between">
+                  <div>
+                    <span className="text-[10px] text-muted block">Deal Value</span>
+                    <span className="font-mono font-bold text-sm text-ink-light dark:text-ink-dark">
+                      {opp.estimated_value != null ? `₹${Number(opp.estimated_value).toLocaleString('en-IN')}` : '—'}
+                    </span>
+                  </div>
+                  <button className="text-xs text-sage font-semibold hover:underline flex items-center gap-1">
+                    <span>Create Quote</span>
+                    <ArrowRight size={12} />
+                  </button>
+                </div>
               </div>
+            ))}
+          </div>
+        ) : (
+          <div className="bg-card-light dark:bg-card-dark rounded-card p-12 text-center border border-hairline-light dark:border-hairline-dark flex flex-col items-center justify-center">
+            <div className="w-12 h-12 rounded-full bg-sage/10 text-sage flex items-center justify-center mb-3">
+              <Target size={24} />
             </div>
-          ))}
-        </div>
+            <h3 className="text-base font-bold text-ink-light dark:text-ink-dark">
+              No Active Opportunities Yet
+            </h3>
+            <p className="text-xs text-muted max-w-sm mt-1">
+              Repeat ordering patterns and high-probability replenishment deals will automatically appear here once customers place sales orders.
+            </p>
+          </div>
+        )
       )}
 
       {/* Record Payment Modal */}

@@ -144,7 +144,7 @@ export const LoginView: React.FC = () => {
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full py-3 bg-ink-light dark:bg-ink-dark text-white rounded-pill text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 shadow-sm hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50 transition-all mt-2"
+            className="w-full py-3 bg-gradient-to-r from-[#E5233B] to-[#B3122A] hover:from-[#FF2E4D] hover:to-[#C0152F] text-white rounded-pill text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 shadow-md hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50 transition-all mt-2"
           >
             {isLoading ? (
               <>

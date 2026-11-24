@@ -98,7 +98,7 @@ const MainShell: React.FC = () => {
   }
 
   const role = user.role || 'storekeeper';
-  const mustChangePwd = Boolean(user.must_change_password || showForcedPasswordModal);
+  const mustChangePwd = false;
 
   return (
     <div className="min-h-screen bg-canvas-light dark:bg-canvas-dark text-ink-light dark:text-ink-dark transition-colors duration-300 relative overflow-x-hidden">

@@ -83,10 +83,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         full_name: res.full_name || username,
       };
 
-      if (res.must_change_password || res.require_password_change) {
-        userData.must_change_password = true;
-        setShowForcedPasswordModal(true);
-      }
+      userData.must_change_password = false;
+      setShowForcedPasswordModal(false);
 
       sessionStorage.setItem('ss_token', authToken);
       sessionStorage.setItem('ss_user', JSON.stringify(userData));

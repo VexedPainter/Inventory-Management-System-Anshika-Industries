@@ -18,7 +18,7 @@ import {
   Layers,
   Sparkles
 } from 'lucide-react';
-import { apiFetch } from '../api/client';
+import { apiFetch, downloadFile } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 
 export const SettingsView: React.FC = () => {
@@ -369,14 +369,14 @@ export const SettingsView: React.FC = () => {
           </div>
 
           <div className="space-y-3">
-            <a
-              href="/api/inventory/export?format=csv&type=full"
-              download
-              className="w-full flex items-center justify-between p-3 rounded-2xl border border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5 text-sm transition-colors"
+            <button
+              type="button"
+              onClick={() => downloadFile('/api/export/comprehensive', 'Anishka_Comprehensive_Ledger.xlsx')}
+              className="w-full flex items-center justify-between p-3 rounded-2xl border border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5 text-sm transition-colors text-left"
             >
-              <span className="font-medium text-ink dark:text-white">Export Full Inventory CSV</span>
+              <span className="font-medium text-ink dark:text-white">Export Comprehensive Inventory Ledger</span>
               <Download className="w-4 h-4 text-muted" />
-            </a>
+            </button>
 
             {isAdmin && (
               <div className="pt-2">

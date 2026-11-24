@@ -3,6 +3,7 @@ import {
   motion,
   AnimatePresence,
   useMotionValue,
+  motionValue,
   useSpring,
   animate,
   AnimationPlaybackControls,
@@ -196,7 +197,7 @@ export const FloatingAniOrb: React.FC = () => {
     }, 700);
   }, [x, y]);
 
-  // Clean goodbye flight back to home
+  // Clean goodbye flight back to home (total ~1.0s)
   const runGoodbye = useCallback(
     async (cancelToken: CancelToken) => {
       if (cancelToken.cancelled) return;
@@ -204,31 +205,29 @@ export const FloatingAniOrb: React.FC = () => {
       setIntroChips(undefined);
       dismissSpeech();
 
-      // Right arm waves twice
-      trackAnimation(animate(rightArmRotate, [0, 32, -10, 30, 0], { duration: 0.5 }));
+      // Right arm waves quickly + wink (~250ms)
+      trackAnimation(animate(rightArmRotate, [0, 32, -10, 30, 0], { duration: 0.25 }));
       setIsWinking(true);
-      await new Promise(r => setTimeout(r, 450));
+      await new Promise(r => setTimeout(r, 220));
       if (cancelToken.cancelled) return;
       setIsWinking(false);
 
-      // Arms retract
-      trackAnimation(animate(armScale, 0, { duration: 0.2 }));
-
-      // Anticipation squash
+      // Arms retract & Anticipation squash (~100ms)
+      trackAnimation(animate(armScale, 0, { duration: 0.1 }));
       await Promise.all([
-        trackAnimation(animate(bodyScaleX, 1.15, { duration: 0.18, ease: 'easeIn' })),
-        trackAnimation(animate(bodyScaleY, 0.82, { duration: 0.18, ease: 'easeIn' })),
+        trackAnimation(animate(bodyScaleX, 1.15, { duration: 0.1, ease: 'easeIn' })),
+        trackAnimation(animate(bodyScaleY, 0.82, { duration: 0.1, ease: 'easeIn' })),
       ]);
       if (cancelToken.cancelled) return;
 
-      // Flight back along mirrored Bezier
+      // Flight back along mirrored Bezier (~500ms)
       setStage('returning');
       setShowTrail(true);
       const startPos: Point = { x: x.get(), y: y.get() };
       const homePos = getHomeCoords();
       const ctrlPoint = getReturnControlPoint(startPos, homePos);
 
-      const progress = useMotionValue(0);
+      const progress = motionValue(0);
       const unsub = progress.on('change', p => {
         const pt = quadraticBezier(startPos, ctrlPoint, homePos, p);
         x.set(pt.x);
@@ -239,12 +238,12 @@ export const FloatingAniOrb: React.FC = () => {
         bodyScaleX.set(1 - Math.sin(p * Math.PI) * 0.1);
       });
 
-      await trackAnimation(animate(progress, 1, { duration: 1.15, ease: [0.35, 0, 0.25, 1] }));
+      await trackAnimation(animate(progress, 1, { duration: 0.5, ease: [0.35, 0, 0.25, 1] }));
       unsub();
 
       if (cancelToken.cancelled) return;
 
-      // Landing at home
+      // Landing at home (~150ms)
       setShowTrail(false);
       x.set(homePos.x);
       y.set(homePos.y);
@@ -252,8 +251,8 @@ export const FloatingAniOrb: React.FC = () => {
       bodyRotate.set(0);
 
       await Promise.all([
-        trackAnimation(animate(bodyScaleY, [0.75, 1.05, 1], { duration: 0.35, ease: 'easeOut' })),
-        trackAnimation(animate(bodyScaleX, [1.18, 0.95, 1], { duration: 0.35, ease: 'easeOut' })),
+        trackAnimation(animate(bodyScaleY, [0.75, 1.05, 1], { duration: 0.15, ease: 'easeOut' })),
+        trackAnimation(animate(bodyScaleX, [1.18, 0.95, 1], { duration: 0.15, ease: 'easeOut' })),
       ]);
 
       setStage('docked');
@@ -315,189 +314,162 @@ export const FloatingAniOrb: React.FC = () => {
         const ctrlPoint = getSwoopControlPoint(p0, p2);
 
         // ==================================================================
-        // T0.00 to 0.35 "Anticipation": label fades; body squashes; eyes narrow
+        // T0.00 to 0.20 "Anticipation": body squashes
         // ==================================================================
         await Promise.all([
-          trackAnimation(animate(bodyScaleX, 1.15, { duration: 0.35, ease: 'easeInOut' })),
-          trackAnimation(animate(bodyScaleY, 0.8, { duration: 0.35, ease: 'easeInOut' })),
+          trackAnimation(animate(bodyScaleX, 1.15, { duration: 0.2, ease: 'easeInOut' })),
+          trackAnimation(animate(bodyScaleY, 0.8, { duration: 0.2, ease: 'easeInOut' })),
         ]);
         if (cancelToken.cancelled) return;
 
         // ==================================================================
-        // T0.35 to 1.55 "Swoop": curved path P0 -> P2 via Bezier
+        // T0.20 to 0.90 "Swoop": curved path P0 -> P2 via Bezier
         // ==================================================================
-        triggerSparkleBurst(10);
+        triggerSparkleBurst(8);
         setShowTrail(true);
 
-        const swoopProgress = useMotionValue(0);
+        const swoopProgress = motionValue(0);
         const unsubSwoop = swoopProgress.on('change', p => {
           const pt = quadraticBezier(p0, ctrlPoint, p2, p);
           x.set(pt.x);
           y.set(pt.y);
-          // Scale from 0.72 to 1.7 (about 96px)
           bodyScale.set(0.72 + p * 0.98);
-          // Leaning along travel direction (-18deg to +10deg)
           bodyRotate.set(-18 + p * 28);
-          // Stretch along motion at mid-flight
           bodyScaleY.set(1 + Math.sin(p * Math.PI) * 0.18);
           bodyScaleX.set(1 - Math.sin(p * Math.PI) * 0.12);
         });
 
         await trackAnimation(
-          animate(swoopProgress, 1, { duration: 1.2, ease: [0.65, 0, 0.35, 1] })
+          animate(swoopProgress, 1, { duration: 0.7, ease: [0.65, 0, 0.35, 1] })
         );
         unsubSwoop();
         if (cancelToken.cancelled) return;
 
         // ==================================================================
-        // T1.55 to 1.95 "Landing": settle with overshoot; trail fades; ground shadow
+        // T0.90 to 1.15 "Landing": settle with ground shadow
         // ==================================================================
         setShowTrail(false);
-        triggerSparkleBurst(8);
-        trackAnimation(animate(shadowOpacity, 0.65, { duration: 0.3 }));
+        triggerSparkleBurst(6);
+        trackAnimation(animate(shadowOpacity, 0.65, { duration: 0.2 }));
 
-        await trackAnimation(animate(bodyRotate, 0, { duration: 0.2, ease: 'easeOut' }));
-        await trackAnimation(animate(bodyScaleY, 0.78, { duration: 0.14, ease: 'easeOut' }));
+        await trackAnimation(animate(bodyRotate, 0, { duration: 0.15, ease: 'easeOut' }));
+        await trackAnimation(animate(bodyScaleY, 0.78, { duration: 0.1, ease: 'easeOut' }));
         await Promise.all([
-          trackAnimation(animate(bodyScaleY, 1, { type: 'spring', stiffness: 420, damping: 14 })),
-          trackAnimation(animate(bodyScaleX, 1, { type: 'spring', stiffness: 420, damping: 14 })),
+          trackAnimation(animate(bodyScaleY, 1, { type: 'spring', stiffness: 500, damping: 18 })),
+          trackAnimation(animate(bodyScaleX, 1, { type: 'spring', stiffness: 500, damping: 18 })),
         ]);
         if (cancelToken.cancelled) return;
 
         // ==================================================================
-        // T1.95 to 2.85 "Turn around": full twirl 0 -> 360 deg + face slide
+        // T1.15 to 1.65 "Turn around": quick twirl 0 -> 360 deg
         // ==================================================================
         const centerY = p2.y;
-        // Hop 24px and return
         trackAnimation(
-          animate(y, [centerY, centerY - 24, centerY], { duration: 0.9, ease: [0.45, 0, 0.2, 1] })
+          animate(y, [centerY, centerY - 18, centerY], { duration: 0.45, ease: [0.45, 0, 0.2, 1] })
         );
 
-        // Slide face to -16px and fade at 35%, bring back from +16px to 0 at 70%
         trackAnimation(
           animate(faceX, [0, -16, 16, 0], {
-            duration: 0.9,
+            duration: 0.45,
             times: [0, 0.35, 0.7, 1],
             ease: 'easeInOut',
           })
         );
         trackAnimation(
           animate(faceOpacity, [1, 0, 0, 1], {
-            duration: 0.9,
+            duration: 0.45,
             times: [0, 0.32, 0.68, 1],
           })
         );
 
-        // Rotate body 0 -> 360
         await trackAnimation(
-          animate(bodyRotate, [0, 360], { duration: 0.9, ease: [0.45, 0, 0.2, 1] })
+          animate(bodyRotate, [0, 360], { duration: 0.45, ease: [0.45, 0, 0.2, 1] })
         );
         bodyRotate.set(0);
         if (cancelToken.cancelled) return;
 
-        // Tiny landing bounce after twirl
-        await Promise.all([
-          trackAnimation(animate(bodyScaleY, [1, 0.88, 1], { duration: 0.25 })),
-          trackAnimation(animate(bodyScaleX, [1, 1.08, 1], { duration: 0.25 })),
-        ]);
-        if (cancelToken.cancelled) return;
-
         // ==================================================================
-        // T2.85 to 3.75 "Jump and bounce": two hops (42px & 22px)
+        // T1.65 to 2.10 "Jump and bounce"
         // ==================================================================
-        // Hop 1: 42px
-        trackAnimation(animate(shadowScaleX, [0.8, 0.45, 1.15, 0.8], { duration: 0.55 }));
-        trackAnimation(animate(shadowOpacity, [0.65, 0.25, 0.85, 0.65], { duration: 0.55 }));
+        trackAnimation(animate(shadowScaleX, [0.8, 0.5, 1.1, 0.8], { duration: 0.4 }));
+        trackAnimation(animate(shadowOpacity, [0.65, 0.3, 0.8, 0.65], { duration: 0.4 }));
 
-        // Up with stretch
-        trackAnimation(animate(bodyScaleY, 1.15, { duration: 0.26, ease: 'easeOut' }));
-        trackAnimation(animate(bodyScaleX, 0.92, { duration: 0.26, ease: 'easeOut' }));
-        await trackAnimation(animate(y, centerY - 42, { duration: 0.26, ease: 'easeOut' }));
-        triggerSparkleBurst(8);
+        trackAnimation(animate(bodyScaleY, 1.12, { duration: 0.18, ease: 'easeOut' }));
+        trackAnimation(animate(bodyScaleX, 0.94, { duration: 0.18, ease: 'easeOut' }));
+        await trackAnimation(animate(y, centerY - 32, { duration: 0.18, ease: 'easeOut' }));
+        triggerSparkleBurst(6);
 
-        // Down with squash
-        trackAnimation(animate(bodyScaleY, 0.82, { duration: 0.28, ease: 'easeIn' }));
-        trackAnimation(animate(bodyScaleX, 1.12, { duration: 0.28, ease: 'easeIn' }));
-        await trackAnimation(animate(y, centerY, { duration: 0.28, ease: 'easeIn' }));
-
-        // Hop 2: 22px
-        trackAnimation(animate(bodyScaleY, 1.08, { duration: 0.18 }));
-        trackAnimation(animate(bodyScaleX, 0.96, { duration: 0.18 }));
-        await trackAnimation(animate(y, centerY - 22, { duration: 0.18, ease: 'easeOut' }));
-
+        trackAnimation(animate(bodyScaleY, 0.85, { duration: 0.18, ease: 'easeIn' }));
+        trackAnimation(animate(bodyScaleX, 1.1, { duration: 0.18, ease: 'easeIn' }));
         await trackAnimation(animate(y, centerY, { duration: 0.18, ease: 'easeIn' }));
+
         await Promise.all([
-          trackAnimation(animate(bodyScaleY, 1, { type: 'spring', stiffness: 350, damping: 18 })),
-          trackAnimation(animate(bodyScaleX, 1, { type: 'spring', stiffness: 350, damping: 18 })),
+          trackAnimation(animate(bodyScaleY, 1, { type: 'spring', stiffness: 450, damping: 20 })),
+          trackAnimation(animate(bodyScaleX, 1, { type: 'spring', stiffness: 450, damping: 20 })),
         ]);
         if (cancelToken.cancelled) return;
 
         // ==================================================================
-        // T3.75 to 5.4 "Wave and talk": arms spring out; wave; speech bubble
+        // T2.10+: "Wave and talk": arms spring out; wave; speech bubble
         // ==================================================================
-        // Arms spring out
         await trackAnimation(
-          animate(armScale, 1, { type: 'spring', stiffness: 300, damping: 14 })
+          animate(armScale, 1, { type: 'spring', stiffness: 350, damping: 16 })
         );
         if (cancelToken.cancelled) return;
 
-        // Right arm waves: -10 to +35 deg, 4 cycles
         trackAnimation(
-          animate(rightArmRotate, [-10, 35, -10, 35, -10, 35, -10, 35, 0], {
-            duration: 0.88,
+          animate(rightArmRotate, [-10, 35, -10, 35, 0], {
+            duration: 0.4,
             ease: 'easeInOut',
           })
         );
-        trackAnimation(
-          animate(leftArmRotate, [0, -8, 8, -5, 0], { duration: 0.88, ease: 'easeInOut' })
-        );
-        trackAnimation(animate(bodyRotate, 8, { duration: 0.3 }));
+        trackAnimation(animate(bodyRotate, 6, { duration: 0.2 }));
         setExpression('speaking');
 
         // Gentle floating loop while speaking
         const floatCtrl = animate(y, [centerY - 6, centerY + 6, centerY - 6], {
-          duration: 2.4,
+          duration: 2.0,
           repeat: Infinity,
           ease: 'easeInOut',
         });
         activeControlsRef.current.add(floatCtrl);
 
-        // At T3.80: Line 1 typewriter
-        await typewrite(`Hi ${firstName}, I'm Ani!`, cancelToken, 26);
+        // Line 1 typewriter (18ms/char)
+        await typewrite(`Hi ${firstName}, I'm Ani!`, cancelToken, 18);
         if (cancelToken.cancelled) {
           floatCtrl.stop();
           return;
         }
 
-        // Wait 1.2s
-        await new Promise(r => setTimeout(r, 1200));
+        // Wait 250ms
+        await new Promise(r => setTimeout(r, 250));
         if (cancelToken.cancelled) {
           floatCtrl.stop();
           return;
         }
 
-        // Line 2 typewriter
+        // Line 2 typewriter (18ms/char)
         const line2 =
-          "Your inventory assistant at Anishka Industries. I keep an eye on stock, purchase orders and payments, so you don't have to.";
-        await typewrite(line2, cancelToken, 24);
+          "Your inventory assistant at Anishka Industries.";
+        await typewrite(line2, cancelToken, 18);
         if (cancelToken.cancelled) {
           floatCtrl.stop();
           return;
         }
 
-        // Wait 1.5s
-        await new Promise(r => setTimeout(r, 1500));
+        // Wait 250ms
+        await new Promise(r => setTimeout(r, 250));
         if (cancelToken.cancelled) {
           floatCtrl.stop();
           return;
         }
 
-        // Line 3 (real data)
+        // Line 3 (real data, 18ms/char)
         const line3 =
           totalAttention > 0
             ? `${totalAttention} items need your attention today.`
             : 'Everything looks healthy today.';
-        await typewrite(line3, cancelToken, 26);
+        await typewrite(line3, cancelToken, 18);
         if (cancelToken.cancelled) {
           floatCtrl.stop();
           return;
@@ -523,24 +495,23 @@ export const FloatingAniOrb: React.FC = () => {
         ]);
 
         // ==================================================================
-        // T5.4 until dismissed (max 6s idle): Idle charm
+        // Auto-dismiss after 3.5s idle
         // ==================================================================
-        for (let cycle = 0; cycle < 3; cycle++) {
-          await new Promise(r => setTimeout(r, 2000));
-          if (cancelToken.cancelled) {
-            floatCtrl.stop();
-            return;
-          }
-          // Cute charm move: quick tilt / wink / hop
-          if (cycle === 0) {
-            trackAnimation(animate(bodyRotate, [-6, 6, 0], { duration: 0.6 }));
-          } else if (cycle === 1) {
-            setIsWinking(true);
-            setTimeout(() => setIsWinking(false), 240);
-          }
+        await new Promise(r => setTimeout(r, 1500));
+        if (cancelToken.cancelled) {
+          floatCtrl.stop();
+          return;
+        }
+        // One charm move: quick tilt
+        trackAnimation(animate(bodyRotate, [-6, 6, 0], { duration: 0.6 }));
+
+        await new Promise(r => setTimeout(r, 2000));
+        if (cancelToken.cancelled) {
+          floatCtrl.stop();
+          return;
         }
 
-        // 6s elapsed without user dismissal -> proceed to goodbye
+        // 3.5s elapsed without user dismissal -> proceed to goodbye
         floatCtrl.stop();
         await runGoodbye(cancelToken);
       } catch (err) {

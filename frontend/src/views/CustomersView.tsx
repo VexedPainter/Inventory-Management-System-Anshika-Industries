@@ -64,7 +64,7 @@ export const CustomersView: React.FC = () => {
 
   // Fetch individual customer financial ledger
   const { data: ledgerData, isLoading: ledgerLoading } = useQuery({
-    queryKey: ['/api/customers/ledger', selectedCustomerForLedger?.id],
+    queryKey: ['/api/customers', selectedCustomerForLedger?.id, 'ledger'],
     queryFn: () => apiFetch(`/api/customers/${selectedCustomerForLedger?.id}/ledger`),
     enabled: Boolean(selectedCustomerForLedger?.id),
   });
