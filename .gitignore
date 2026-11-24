@@ -25,7 +25,12 @@ pip-selfcheck.json
 # ─── Database ──────────────────────────────────
 *.db
 *.sqlite
-*.sqlite3
+**.sqlite3
+*.db-shm
+*.db-wal
+
+# --- Archives ----------------------------------
+*.zip
 
 # ─── Logs ──────────────────────────────────────
 *.log

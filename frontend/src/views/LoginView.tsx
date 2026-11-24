@@ -1,14 +1,29 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Lock, User, AlertCircle, Loader2, ArrowRight, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { AiOrb } from '../components/AiOrb';
+import { LoginWaveBackground, LoginWaveStatus } from '../components/LoginWaveBackground';
 
 export const LoginView: React.FC = () => {
   const { login, isLoading, showForcedPasswordModal, changePassword, dismissForcedPasswordModal } = useAuth();
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('admin@2026');
   const [errorMsg, setErrorMsg] = useState('');
+  const [waveStatus, setWaveStatus] = useState<LoginWaveStatus>('idle');
+
+  // Forced dark mode on login route; restore previous html class state on unmount
+  const hadDarkRef = useRef<boolean>(false);
+  useEffect(() => {
+    const root = document.documentElement;
+    hadDarkRef.current = root.classList.contains('dark');
+    root.classList.add('dark');
+    return () => {
+      if (!hadDarkRef.current) {
+        root.classList.remove('dark');
+      }
+    };
+  }, []);
 
   // Forced password modal state
   const [newPassword, setNewPassword] = useState('');
@@ -19,10 +34,19 @@ export const LoginView: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
+    setWaveStatus('authenticating');
     try {
       await login(username, password);
+      setWaveStatus('success');
     } catch (err: any) {
-      setErrorMsg(err.message || 'Login failed. Please check credentials.');
+      setWaveStatus('failed');
+      setTimeout(() => setWaveStatus('idle'), 1200);
+      const msg = err.message || 'Login failed. Please check credentials.';
+      if (msg.toLowerCase().includes('authentication required')) {
+        setErrorMsg('Invalid credentials or session expired. Click "admin" below to auto-fill default password (admin@2026).');
+      } else {
+        setErrorMsg(msg);
+      }
     }
   };
 
@@ -48,12 +72,15 @@ export const LoginView: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-canvas-light dark:bg-canvas-dark text-ink-light dark:text-ink-dark flex flex-col items-center justify-center p-4 transition-colors duration-300">
+    <div className="dark min-h-screen bg-[#07080A] text-white flex flex-col items-center justify-center p-4 relative overflow-hidden select-none">
+      {/* Dynamic Red Silk Waves & Ambient Canvas Wallpaper */}
+      <LoginWaveBackground status={waveStatus} />
+
       <motion.div
         initial={{ opacity: 0, y: 15 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.3 }}
-        className="w-full max-w-md bg-card-light dark:bg-card-dark rounded-card p-8 shadow-bento border border-hairline-light dark:border-hairline-dark flex flex-col items-center relative"
+        className="w-full max-w-md bg-card-light dark:bg-card-dark rounded-card p-8 shadow-bento border border-hairline-light dark:border-hairline-dark flex flex-col items-center relative z-10"
       >
         {/* Glowing 3D AI Orb floating above the form */}
         <div className="mb-4">
@@ -168,7 +195,7 @@ export const LoginView: React.FC = () => {
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="w-full max-w-sm bg-card-light dark:bg-card-dark rounded-card p-6 shadow-2xl border border-hairline-light dark:border-hairline-dark"
+            className="w-full max-w-sm bg-card-light dark:bg-card-dark rounded-card p-6 shadow-2xl border border-hairline-light dark:border-hairline-dark relative z-50"
           >
             <div className="w-10 h-10 rounded-full bg-warning/10 text-warning flex items-center justify-center mb-3">
               <ShieldCheck size={20} />

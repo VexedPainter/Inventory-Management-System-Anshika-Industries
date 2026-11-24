@@ -26,7 +26,6 @@ import { apiFetch } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useOrb } from '../context/OrbContext';
 import { CountUp } from '../components/CountUp';
-import { AniOrb } from '../components/AiOrb';
 import { Reveal } from '../components/Reveal';
 import { Skeleton } from '../components/Skeleton';
 
@@ -389,14 +388,6 @@ export const DashboardView: React.FC<DashboardProps> = ({
                 </p>
               </div>
 
-              {/* Embedded Ani Orb on card header with click-to-chat */}
-              <div
-                onClick={() => openChat('Explain current stock movement trends and velocity')}
-                className="cursor-pointer"
-                title="Click Ani to inspect movement telemetry"
-              >
-                <AniOrb size={44} interactive />
-              </div>
             </div>
 
             {/* Floating metrics chip */}

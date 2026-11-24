@@ -23,7 +23,7 @@ import {
 import { CountUp } from '../components/CountUp';
 import { Skeleton } from '../components/Skeleton';
 import { Reveal, CUBIC_EASE_OUT } from '../components/Reveal';
-import { AniOrb, OrbExpression } from '../components/AiOrb';
+import { OrbExpression } from '../components/AiOrb';
 
 const SAMPLE_CHART_DATA = [
   { day: 'Mon', inward: 40, outward: 24 },
@@ -179,21 +179,21 @@ export const DevMotionView: React.FC = () => {
 
         {/* Live Orb Presentation Stage */}
         <div className="py-10 bg-canvas-light/60 dark:bg-black/20 rounded-tile flex flex-col items-center justify-center relative min-h-[170px] border border-hairline-light dark:border-hairline-dark">
-          <AniOrb
-            size={orbDemoSize}
-            expression={orbDemoExpr}
-            speechText={orbDemoSpeech}
-            speechChips={
-              orbDemoSpeech
-                ? [
-                    { label: 'Draft POs', action: () => alert('Action: Draft POs triggered') },
-                    { label: 'Dismiss', action: () => setOrbDemoSpeech(null) },
-                  ]
-                : undefined
-            }
-            onDismissSpeech={() => setOrbDemoSpeech(null)}
-            bubblePosition="top"
-          />
+          <div
+            className="rounded-full shadow-2xl relative flex items-center justify-center"
+            style={{
+              width: orbDemoSize,
+              height: orbDemoSize,
+              background: 'radial-gradient(circle at 35% 28%, #8E86FF 0%, #5B4DFF 38%, #3328E8 70%, #2A1FD0 100%)',
+              boxShadow: '0 10px 30px rgba(70,60,255,0.45), inset 0 -8px 16px rgba(143,227,255,0.55)',
+            }}
+          >
+            <div className="flex items-center gap-2">
+              <span className="w-1.5 h-2.5 bg-white rounded-full shadow-[0_0_6px_#fff]" />
+              <span className="w-1.5 h-2.5 bg-white rounded-full shadow-[0_0_6px_#fff]" />
+            </div>
+          </div>
+          <span className="text-[11px] text-muted mt-3 font-mono">Ani Orb Preview ({orbDemoExpr})</span>
         </div>
 
         {/* Expression State Controls */}

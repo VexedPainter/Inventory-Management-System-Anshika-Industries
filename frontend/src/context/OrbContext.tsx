@@ -1,14 +1,18 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { OrbExpression } from '../components/AiOrb';
 
-interface SpeechChip {
+export type OrbStage = 'docked' | 'intro' | 'callout' | 'dragging' | 'returning';
+
+export interface SpeechChip {
   label: string;
   action: () => void;
 }
 
-interface OrbContextType {
-  stage: 'center' | 'callout' | 'docked';
+export interface OrbContextType {
+  stage: OrbStage;
+  setStage: (stage: OrbStage) => void;
   expression: OrbExpression;
+  setExpression: (expr: OrbExpression) => void;
   speechText: string | null;
   speechChips?: SpeechChip[];
   bubblePosition: 'top' | 'right' | 'bottom' | 'left';
@@ -16,11 +20,15 @@ interface OrbContextType {
   reduceAiPopups: boolean;
   isChatOpen: boolean;
   chatQuery: string;
+  dashboardData: any;
+  introTrigger: number;
+  resetTrigger: number;
   setReduceAiPopups: (val: boolean) => void;
   openChat: (initialQuery?: string) => void;
   closeChat: () => void;
   dismissSpeech: () => void;
   dock: () => void;
+  resetPosition: () => void;
   say: (
     text: string,
     options?: {
@@ -40,12 +48,15 @@ interface OrbContextType {
 const OrbContext = createContext<OrbContextType | undefined>(undefined);
 
 export const OrbProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [stage, setStage] = useState<'center' | 'callout' | 'docked'>('docked');
+  const [stage, setStage] = useState<OrbStage>('docked');
   const [expression, setExpression] = useState<OrbExpression>('idle');
   const [speechText, setSpeechText] = useState<string | null>(null);
   const [speechChips, setSpeechChips] = useState<SpeechChip[] | undefined>(undefined);
   const [bubblePosition, setBubblePosition] = useState<'top' | 'right' | 'bottom' | 'left'>('top');
   const [calloutCoords, setCalloutCoords] = useState<{ top: number; left: number } | null>(null);
+  const [dashboardData, setDashboardData] = useState<any>(null);
+  const [introTrigger, setIntroTrigger] = useState(0);
+  const [resetTrigger, setResetTrigger] = useState(0);
 
   // Settings
   const [reduceAiPopups, setReduceAiPopupsState] = useState<boolean>(() => {
@@ -67,10 +78,9 @@ export const OrbProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatQuery, setChatQuery] = useState('');
 
-  // History tracking to satisfy: "Never repeat the same line twice in a session, and don't show it more than once per page visit."
+  // Tracking history
   const spokenHistoryRef = useRef<Set<string>>(new Set());
   const visitedPagesRef = useRef<Set<string>>(new Set());
-  const introDoneRef = useRef<boolean>(false);
   const speechTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idleSleepyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -86,7 +96,7 @@ export const OrbProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         return curr;
       });
-    }, 20000); // 20s idle
+    }, 20000);
   }, [expression]);
 
   useEffect(() => {
@@ -121,6 +131,13 @@ export const OrbProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCalloutCoords(null);
   }, [dismissSpeech]);
 
+  const resetPosition = useCallback(() => {
+    try {
+      localStorage.removeItem('ani-orb-pos');
+    } catch {}
+    setResetTrigger(prev => prev + 1);
+  }, []);
+
   const openChat = useCallback((initialQuery?: string) => {
     dismissSpeech();
     setChatQuery(initialQuery || '');
@@ -145,7 +162,7 @@ export const OrbProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     ) => {
       if (reduceAiPopups) return;
-      if (spokenHistoryRef.current.has(text)) return; // Never repeat the same line twice
+      if (spokenHistoryRef.current.has(text)) return;
 
       spokenHistoryRef.current.add(text);
       if (speechTimeoutRef.current) clearTimeout(speechTimeoutRef.current);
@@ -154,21 +171,9 @@ export const OrbProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setSpeechChips(options?.chips);
       setExpression(options?.expression || 'speaking');
       setBubblePosition(options?.position || 'top');
+      setStage('callout');
 
-      if (options?.targetSelector) {
-        const el = document.querySelector(options.targetSelector);
-        if (el) {
-          const rect = el.getBoundingClientRect();
-          setCalloutCoords({
-            top: rect.top + window.scrollY + rect.height / 2,
-            left: rect.right + 24,
-          });
-          setStage('callout');
-        }
-      }
-
-      // Auto-hide after duration (default 4.0s)
-      const dur = options?.duration || 4000;
+      const dur = options?.duration || 4500;
       speechTimeoutRef.current = setTimeout(() => {
         dismissSpeech();
         dock();
@@ -201,67 +206,39 @@ export const OrbProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [say]
   );
 
-  // 1. Initial Login Choreography: Orb in center, then glides to low stock card
   const onDashboardReady = useCallback(
     (stats?: any) => {
-      if (introDoneRef.current || reduceAiPopups) return;
-      introDoneRef.current = true;
+      let alreadyDone = false;
+      try {
+        alreadyDone = sessionStorage.getItem('ani-intro-done') === '1';
+      } catch {}
 
-      // Stage 1: First login: orb fades in at screen centre with bubble
-      setStage('center');
-      setExpression('speaking');
-      setSpeechText("I'm Ani, your inventory AI.");
-      setSpeechChips(undefined);
-      setBubblePosition('top');
+      if (stats) setDashboardData(stats);
 
-      // Stage 2: After 1.8s, glide to sit beside relevant card (e.g. low stock)
-      setTimeout(() => {
-        const lowStockCount = stats?.status_distribution?.LOW ?? (stats?.counts?.LOW || 0);
-        const speechLine =
-          lowStockCount > 0
-            ? `${lowStockCount} items are below reorder buffer. Want me to draft POs?`
-            : 'Warehouse telemetry is optimal. All safety buffers intact.';
+      if (alreadyDone) {
+        return;
+      }
 
-        const targetEl = document.getElementById('bento-low-stock') || document.querySelector('[data-card="low-stock"]');
-        if (targetEl) {
-          const rect = targetEl.getBoundingClientRect();
-          setCalloutCoords({
-            top: rect.top + window.scrollY + 20,
-            left: rect.left + rect.width - 20,
-          });
-        }
-        setStage('callout');
-        setExpression('speaking');
-        setSpeechText(speechLine);
-        setSpeechChips([
-          {
-            label: 'Draft POs',
-            action: () => {
-              openChat('Draft purchase orders for all items below reorder buffer');
-            },
-          },
-          {
-            label: 'Not now',
-            action: () => {
-              dock();
-            },
-          },
-        ]);
+      // Mark session flag immediately to avoid race condition / double effect
+      try {
+        sessionStorage.setItem('ani-intro-done', '1');
+      } catch {}
 
-        // Stage 3: After 4s it shrinks to 40px and docks bottom-right
-        if (speechTimeoutRef.current) clearTimeout(speechTimeoutRef.current);
-        speechTimeoutRef.current = setTimeout(() => {
-          dock();
-        }, 4000);
-      }, 2000);
+      if (reduceAiPopups) {
+        setStage('docked');
+        return;
+      }
+
+      setStage('intro');
+      setIntroTrigger(prev => prev + 1);
     },
-    [reduceAiPopups, openChat, dock]
+    [reduceAiPopups]
   );
 
-  // 4. Page change choreography: pop out of dock, glide to card, say one data-driven line, return to dock
   const notifyPageChange = useCallback(
     (pageKey: string, pageData?: any) => {
       if (reduceAiPopups || visitedPagesRef.current.has(pageKey)) return;
+      if (stage === 'intro' || stage === 'dragging' || isChatOpen) return;
       visitedPagesRef.current.add(pageKey);
 
       let textToSay = '';
@@ -277,31 +254,18 @@ export const OrbProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (!textToSay || spokenHistoryRef.current.has(textToSay)) return;
 
-      // Pop out of dock with spring
-      spokenHistoryRef.current.add(textToSay);
-      setStage('callout');
-      setCalloutCoords({
-        top: 140,
-        left: window.innerWidth > 900 ? window.innerWidth - 180 : window.innerWidth - 80,
-      });
-      setExpression('speaking');
-      setSpeechText(textToSay);
-      setSpeechChips(undefined);
-      setBubblePosition('left');
-
-      if (speechTimeoutRef.current) clearTimeout(speechTimeoutRef.current);
-      speechTimeoutRef.current = setTimeout(() => {
-        dock();
-      }, 4000);
+      say(textToSay, { expression: 'speaking', duration: 4000 });
     },
-    [reduceAiPopups, dock]
+    [reduceAiPopups, stage, isChatOpen, say]
   );
 
   return (
     <OrbContext.Provider
       value={{
         stage,
+        setStage,
         expression,
+        setExpression,
         speechText,
         speechChips,
         bubblePosition,
@@ -309,11 +273,15 @@ export const OrbProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         reduceAiPopups,
         isChatOpen,
         chatQuery,
+        dashboardData,
+        introTrigger,
+        resetTrigger,
         setReduceAiPopups,
         openChat,
         closeChat,
         dismissSpeech,
         dock,
+        resetPosition,
         say,
         notifyPageChange,
         triggerSuccess,
