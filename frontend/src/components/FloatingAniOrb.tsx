@@ -277,11 +277,25 @@ export const FloatingAniOrb: React.FC = () => {
 
   // Typewriter helper
   const typewrite = useCallback(
-    async (fullText: string, cancelToken: CancelToken, speedMs = 26): Promise<void> => {
+    async (fullText: string, cancelToken: CancelToken, speedMs = 32): Promise<void> => {
       for (let i = 1; i <= fullText.length; i++) {
         if (cancelToken.cancelled) return;
         setIntroBubbleText(fullText.slice(0, i));
         await new Promise(r => setTimeout(r, speedMs));
+      }
+    },
+    []
+  );
+
+  // Cancellable sleep helper so Escape / click immediately cancels
+  const waitWithCancel = useCallback(
+    async (ms: number, cancelToken: CancelToken): Promise<void> => {
+      const step = 50;
+      let elapsed = 0;
+      while (elapsed < ms) {
+        if (cancelToken.cancelled) return;
+        await new Promise(r => setTimeout(r, Math.min(step, ms - elapsed)));
+        elapsed += step;
       }
     },
     []
@@ -303,7 +317,7 @@ export const FloatingAniOrb: React.FC = () => {
           setTimeout(() => {
             setIntroBubbleText(null);
             setExpression('idle');
-          }, 3500);
+          }, 6000);
           isRunningIntroRef.current = false;
           return;
         }
@@ -434,42 +448,50 @@ export const FloatingAniOrb: React.FC = () => {
         });
         activeControlsRef.current.add(floatCtrl);
 
-        // Line 1 typewriter (18ms/char)
-        await typewrite(`Hi ${firstName}, I'm Ani!`, cancelToken, 18);
+        // Line 1: Introduction (32ms/char smooth typing)
+        await typewrite(`Hi ${firstName}, I'm Ani!`, cancelToken, 32);
         if (cancelToken.cancelled) {
           floatCtrl.stop();
           return;
         }
 
-        // Wait 250ms
-        await new Promise(r => setTimeout(r, 250));
+        // Wait 5.5 seconds so user can comfortably read the intro text
+        await waitWithCancel(2400, cancelToken);
+        if (cancelToken.cancelled) {
+          floatCtrl.stop();
+          return;
+        }
+        setIsWinking(true);
+        await waitWithCancel(350, cancelToken);
+        setIsWinking(false);
+        await waitWithCancel(2750, cancelToken);
         if (cancelToken.cancelled) {
           floatCtrl.stop();
           return;
         }
 
-        // Line 2 typewriter (18ms/char)
+        // Line 2: Role & Context (32ms/char)
         const line2 =
           "Your inventory assistant at Anishka Industries.";
-        await typewrite(line2, cancelToken, 18);
+        await typewrite(line2, cancelToken, 32);
         if (cancelToken.cancelled) {
           floatCtrl.stop();
           return;
         }
 
-        // Wait 250ms
-        await new Promise(r => setTimeout(r, 250));
+        // Wait 5 seconds so user can comfortably read Line 2
+        await waitWithCancel(5000, cancelToken);
         if (cancelToken.cancelled) {
           floatCtrl.stop();
           return;
         }
 
-        // Line 3 (real data, 18ms/char)
+        // Line 3: Live Status Summary (32ms/char)
         const line3 =
           totalAttention > 0
             ? `${totalAttention} items need your attention today.`
             : 'Everything looks healthy today.';
-        await typewrite(line3, cancelToken, 18);
+        await typewrite(line3, cancelToken, 32);
         if (cancelToken.cancelled) {
           floatCtrl.stop();
           return;
@@ -494,10 +516,8 @@ export const FloatingAniOrb: React.FC = () => {
           },
         ]);
 
-        // ==================================================================
-        // Auto-dismiss after 3.5s idle
-        // ==================================================================
-        await new Promise(r => setTimeout(r, 1500));
+        // Auto-dismiss after 8s idle (ample time to read and click)
+        await waitWithCancel(3500, cancelToken);
         if (cancelToken.cancelled) {
           floatCtrl.stop();
           return;
@@ -505,13 +525,13 @@ export const FloatingAniOrb: React.FC = () => {
         // One charm move: quick tilt
         trackAnimation(animate(bodyRotate, [-6, 6, 0], { duration: 0.6 }));
 
-        await new Promise(r => setTimeout(r, 2000));
+        await waitWithCancel(4500, cancelToken);
         if (cancelToken.cancelled) {
           floatCtrl.stop();
           return;
         }
 
-        // 3.5s elapsed without user dismissal -> proceed to goodbye
+        // 8s elapsed without user dismissal -> proceed to goodbye
         floatCtrl.stop();
         await runGoodbye(cancelToken);
       } catch (err) {
@@ -544,6 +564,7 @@ export const FloatingAniOrb: React.FC = () => {
       rightArmRotate,
       leftArmRotate,
       typewrite,
+      waitWithCancel,
       totalAttention,
       stopAllAnimations,
       openChat,
