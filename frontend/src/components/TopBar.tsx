@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { Search, Bell, Moon, Sun, ArrowRight, CornerDownLeft } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { NotificationPanel } from './NotificationPanel';
 
 interface TopBarProps {
   activeTab?: string;
@@ -95,6 +96,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   const shouldReduceMotion = useReducedMotion();
   const [searchVal, setSearchVal] = useState('');
   const [isFocused, setIsFocused] = useState(false);
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const [unreadCount, setUnreadCount] = useState<number>(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Handle Ctrl+K to focus search input
@@ -219,17 +222,47 @@ export const TopBar: React.FC<TopBarProps> = ({
           </motion.button>
         </form>
 
-        {/* Notifications button */}
-        <motion.button
-          whileTap={{ scale: 0.94 }}
-          onClick={onNotificationsClick}
-          className="w-10 h-10 rounded-full bg-card-light dark:bg-card-dark text-ink-light dark:text-ink-dark shadow-bento border border-hairline-light dark:border-hairline-dark flex items-center justify-center hover:bg-black/5 dark:hover:bg-white/5 transition-all relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sage"
-          aria-label="Notifications — 1 unread"
-          title="Notifications"
-        >
-          <Bell size={17} />
-          <span className="absolute top-2.5 right-2.5 w-2 h-2 bg-sage rounded-full" aria-hidden="true" />
-        </motion.button>
+        {/* Notifications button with Popover Panel */}
+        <div className="relative">
+          <motion.button
+            whileTap={{ scale: 0.94 }}
+            onClick={() => {
+              if (onNotificationsClick) onNotificationsClick();
+              setIsNotificationsOpen(prev => !prev);
+            }}
+            className={`w-10 h-10 rounded-full bg-card-light dark:bg-card-dark text-ink-light dark:text-ink-dark shadow-bento border transition-all relative flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sage ${
+              isNotificationsOpen
+                ? 'border-sage ring-2 ring-sage/20 bg-sage/10 text-sage'
+                : 'border-hairline-light dark:border-hairline-dark hover:bg-black/5 dark:hover:bg-white/5'
+            }`}
+            aria-label={unreadCount > 0 ? `Notifications — ${unreadCount} unread` : 'Notifications — All caught up'}
+            aria-expanded={isNotificationsOpen}
+            aria-haspopup="dialog"
+            title="Notifications"
+          >
+            <Bell size={17} />
+            {unreadCount > 0 ? (
+              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 bg-sage text-white text-[10px] font-bold rounded-full flex items-center justify-center shadow-xs font-mono animate-fade-in" aria-hidden="true">
+                {unreadCount > 9 ? '9+' : unreadCount}
+              </span>
+            ) : (
+              <span className="absolute top-2.5 right-2.5 w-2 h-2 bg-sage/60 rounded-full" aria-hidden="true" />
+            )}
+          </motion.button>
+
+          {/* Floating Notifications Popover */}
+          <AnimatePresence>
+            {isNotificationsOpen && (
+              <NotificationPanel
+                isOpen={isNotificationsOpen}
+                onClose={() => setIsNotificationsOpen(false)}
+                onNavigateTab={onNavigateTab}
+                onAskAni={onAskAni}
+                onUnreadCountChange={setUnreadCount}
+              />
+            )}
+          </AnimatePresence>
+        </div>
 
         {/* Theme toggle button */}
         <motion.button
