@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   X,
   Send,
@@ -91,6 +92,7 @@ export const AskAniPanel: React.FC<AskAniPanelProps> = ({
 }) => {
   const { user } = useAuth();
   const { triggerSuccess, triggerAlert } = useOrb();
+  const queryClient = useQueryClient();
   const shouldReduceMotion = useReducedMotion();
 
   const [input, setInput] = useState('');
@@ -178,6 +180,11 @@ export const AskAniPanel: React.FC<AskAniPanelProps> = ({
     const text = (textToSend || input).trim();
     if (!text || isLoading) return;
 
+    if (/reorder|replenish|emergency purchase order|auto-draft/i.test(text)) {
+      sessionStorage.setItem('needs_attention_dismissed', '1');
+      window.dispatchEvent(new CustomEvent('replenishment-handled'));
+    }
+
     const userMsg: ChatMessage = {
       id: String(Date.now()),
       role: 'user',
@@ -251,6 +258,13 @@ export const AskAniPanel: React.FC<AskAniPanelProps> = ({
         method: action.method || 'POST',
         body: action.payload,
       });
+
+      // Invalidate queries across the app so all numbers refresh
+      queryClient.invalidateQueries();
+
+      // Ensure needs attention banner is dismissed and stays dismissed
+      sessionStorage.setItem('needs_attention_dismissed', '1');
+      window.dispatchEvent(new CustomEvent('replenishment-handled', { detail: { action } }));
 
       // Success animation on orb & show toast
       triggerSuccess('Action approved and recorded in audit ledger');

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import {
   AlertTriangle,
@@ -12,6 +12,9 @@ import {
   AlertCircle,
   Clock,
   ArrowRight,
+  CheckCircle2,
+  X,
+  Loader2,
 } from 'lucide-react';
 import {
   AreaChart,
@@ -67,7 +70,56 @@ export const DashboardView: React.FC<DashboardProps> = ({
 }) => {
   const { user } = useAuth();
   const { onDashboardReady, openChat } = useOrb();
+  const queryClient = useQueryClient();
   const [minSkeletonElapsed, setMinSkeletonElapsed] = useState(false);
+  const [isDismissed, setIsDismissed] = useState<boolean>(() => {
+    return sessionStorage.getItem('needs_attention_dismissed') === '1';
+  });
+  const [isReplenishing, setIsReplenishing] = useState(false);
+  const [replenishSuccess, setReplenishSuccess] = useState(false);
+
+  // Listen for replenishment action executed across the app (e.g. from AskAni copilot or QuickPO)
+  useEffect(() => {
+    const handleReplenishmentHandled = () => {
+      setIsDismissed(true);
+      sessionStorage.setItem('needs_attention_dismissed', '1');
+    };
+    window.addEventListener('replenishment-handled', handleReplenishmentHandled);
+    return () => {
+      window.removeEventListener('replenishment-handled', handleReplenishmentHandled);
+    };
+  }, []);
+
+  const handleAutoDraft = async () => {
+    setIsReplenishing(true);
+    try {
+      if (user?.role === 'admin' || user?.role === 'manager') {
+        await apiFetch('/api/automation/run-now', { method: 'POST' });
+        setReplenishSuccess(true);
+        sessionStorage.setItem('needs_attention_dismissed', '1');
+        queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
+        queryClient.invalidateQueries({ queryKey: ['inventory-items'] });
+        setTimeout(() => {
+          setIsDismissed(true);
+        }, 1800);
+      } else {
+        sessionStorage.setItem('needs_attention_dismissed', '1');
+        setIsDismissed(true);
+        openChat('Draft emergency purchase orders for all out of stock and low stock SKUs');
+      }
+    } catch {
+      sessionStorage.setItem('needs_attention_dismissed', '1');
+      setIsDismissed(true);
+      openChat('Draft emergency purchase orders for all out of stock and low stock SKUs');
+    } finally {
+      setIsReplenishing(false);
+    }
+  };
+
+  const handleDismissBanner = () => {
+    setIsDismissed(true);
+    sessionStorage.setItem('needs_attention_dismissed', '1');
+  };
 
   // Guarantee skeletons stay at least 450ms on route change
   useEffect(() => {
@@ -225,40 +277,79 @@ export const DashboardView: React.FC<DashboardProps> = ({
       {/* ==================================================================== */}
       {/* AT-A-GLANCE "NEEDS ATTENTION" STRIP                                  */}
       {/* ==================================================================== */}
-      {needsAttentionTotal > 0 && (
+      {!isDismissed && needsAttentionTotal > 0 && (
         <Reveal index={0}>
-          <div className="bg-attention-bg dark:bg-attention-bg-dark border border-attention-border/60 dark:border-attention-border-dark rounded-2xl p-3.5 px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
-            <div className="flex items-center gap-3">
-              <span className="relative flex h-3 w-3 shrink-0">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-negative opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-3 w-3 bg-negative"></span>
-              </span>
-              <div>
-                <p className="text-xs font-bold text-ink-light dark:text-ink-dark flex items-center gap-1.5">
-                  Needs Attention: <span className="text-negative font-mono">{needsAttentionTotal} SKUs</span> require immediate replenishment action
-                </p>
-                <p className="text-[11px] text-muted">
-                  {outOfStockCount > 0 && <span className="font-semibold text-negative">{outOfStockCount} critical items out of stock</span>}
-                  {outOfStockCount > 0 && lowStockCount > 0 && <span> • </span>}
-                  {lowStockCount > 0 && <span>{lowStockCount} items below safety threshold</span>}
-                </p>
+          <div className="bg-attention-bg dark:bg-attention-bg-dark border border-attention-border/60 dark:border-attention-border-dark rounded-2xl p-3.5 px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm transition-all">
+            {replenishSuccess ? (
+              <div className="flex items-center gap-3">
+                <span className="flex h-6 w-6 rounded-full bg-sage/20 text-sage items-center justify-center shrink-0">
+                  <CheckCircle2 size={16} />
+                </span>
+                <div>
+                  <p className="text-xs font-bold text-ink-light dark:text-ink-dark">
+                    Replenishment Triggered Successfully
+                  </p>
+                  <p className="text-[11px] text-muted">
+                    Emergency draft purchase orders created for critical SKUs • Dismissing alert...
+                  </p>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="flex items-center gap-3">
+                <span className="relative flex h-3 w-3 shrink-0">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-negative opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-negative"></span>
+                </span>
+                <div>
+                  <p className="text-xs font-bold text-ink-light dark:text-ink-dark flex items-center gap-1.5">
+                    Needs Attention: <span className="text-negative font-mono">{needsAttentionTotal} SKUs</span> require immediate replenishment action
+                  </p>
+                  <p className="text-[11px] text-muted">
+                    {outOfStockCount > 0 && <span className="font-semibold text-negative">{outOfStockCount} critical items out of stock</span>}
+                    {outOfStockCount > 0 && lowStockCount > 0 && <span> • </span>}
+                    {lowStockCount > 0 && <span>{lowStockCount} items below safety threshold</span>}
+                  </p>
+                </div>
+              </div>
+            )}
             <div className="flex items-center gap-2 self-end sm:self-auto">
-              <button
-                onClick={() => openChat('Draft emergency purchase orders for all out of stock and low stock SKUs')}
-                className="px-3 py-1 bg-negative text-white rounded-pill text-[11px] font-semibold flex items-center gap-1.5 shadow-sm hover:opacity-90 transition-opacity"
-              >
-                <Sparkles size={12} />
-                <span>Auto-Draft POs</span>
-              </button>
-              <button
-                onClick={() => onNavigateTab('inventory')}
-                className="px-3 py-1 bg-black/5 dark:bg-white/10 hover:bg-black/10 text-ink-light dark:text-ink-dark rounded-pill text-[11px] font-medium transition-colors flex items-center gap-1"
-              >
-                <span>Filter Inventory</span>
-                <ArrowRight size={12} />
-              </button>
+              {!replenishSuccess && (
+                <>
+                  <motion.button
+                    whileTap={{ scale: 0.94 }}
+                    disabled={isReplenishing}
+                    onClick={handleAutoDraft}
+                    className="px-3 py-1 bg-negative text-white rounded-pill text-[11px] font-semibold flex items-center gap-1.5 shadow-sm hover:opacity-90 transition-opacity disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-negative"
+                  >
+                    {isReplenishing ? (
+                      <>
+                        <Loader2 size={12} className="animate-spin" />
+                        <span>Refilling...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles size={12} />
+                        <span>Auto-Draft POs</span>
+                      </>
+                    )}
+                  </motion.button>
+                  <button
+                    onClick={() => onNavigateTab('inventory')}
+                    className="px-3 py-1 bg-black/5 dark:bg-white/10 hover:bg-black/10 text-ink-light dark:text-ink-dark rounded-pill text-[11px] font-medium transition-colors flex items-center gap-1"
+                  >
+                    <span>Filter Inventory</span>
+                    <ArrowRight size={12} />
+                  </button>
+                  <button
+                    onClick={handleDismissBanner}
+                    title="Dismiss alert"
+                    aria-label="Dismiss alert"
+                    className="p-1 rounded-full text-muted hover:text-ink-light dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors ml-0.5"
+                  >
+                    <X size={14} />
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </Reveal>
@@ -859,7 +950,11 @@ export const DashboardView: React.FC<DashboardProps> = ({
             <div className="mt-4">
               <motion.button
                 whileTap={{ scale: 0.94 }}
-                onClick={() => openChat('Run automated stock safety scan and draft replenishment POs')}
+                onClick={() => {
+                  sessionStorage.setItem('needs_attention_dismissed', '1');
+                  setIsDismissed(true);
+                  openChat('Run automated stock safety scan and draft replenishment POs');
+                }}
                 className="sweep-hover w-full py-2.5 px-4 bg-ink-light text-white text-xs font-semibold rounded-pill shadow-sm transition-all flex items-center justify-center gap-2 focus-visible:ring-2 focus-visible:ring-white"
               >
                 <Sparkles size={14} className="text-[#8FE3FF]" />
